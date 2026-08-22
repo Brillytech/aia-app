@@ -1,6 +1,4 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { decode } from "base64-arraybuffer";
-import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -19,7 +17,6 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { usePremium } from "../../premium";
 import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
-import { type IconName } from "../../ui/alerts";
 import { AlertModal } from "../../ui/AlertModal";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
@@ -251,19 +248,37 @@ export default function ProfilePage() {
 
       setUploadingPhoto(true);
 
-      const uri = result.assets[0].uri;
-      const extension = uri.split(".").pop()?.toLowerCase()?.split("?")[0] || "jpg";
-      const safeExtension = ["jpg", "jpeg", "png", "webp"].includes(extension) ? extension : "jpg";
-      const contentType = safeExtension === "png" ? "image/png" : safeExtension === "webp" ? "image/webp" : "image/jpeg";
-      const filePath = `${user.id}/avatar-${Date.now()}.${safeExtension}`;
+      const asset = result.assets[0];
 
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // Fetch the picked file as a Blob rather than reading it into a base64
+      // string. `expo-file-system` is a no-op shim on web — its whole module
+      // is `documentDirectory = null` with no methods — so
+      // `readAsStringAsync` throws there and avatar upload could never work.
+      // `fetch` handles the picker's `blob:` URI on web and `file://` on
+      // native, so one path covers both, skips a ~33% base64 inflation, and
+      // drops the `base64-arraybuffer` dependency.
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+
+      // The URI is where the old extension sniffing broke on web: a picker
+      // result there looks like `blob:http://host/uuid` with no filename at
+      // all, so every upload was labelled .jpg/image-jpeg regardless of what
+      // was chosen. The asset's own mimeType is authoritative; the blob's is
+      // the fallback.
+      const contentType = asset.mimeType || blob.type || "image/jpeg";
+      const safeExtension =
+        {
+          "image/png": "png",
+          "image/webp": "webp",
+          "image/gif": "gif",
+          "image/jpeg": "jpg",
+        }[contentType] || "jpg";
+
+      const filePath = `${user.id}/avatar-${Date.now()}.${safeExtension}`;
 
       const { error: uploadError } = await supabase.storage
         .from("profile-pictures")
-        .upload(filePath, decode(base64), {
+        .upload(filePath, blob, {
           contentType,
           upsert: true,
         });
@@ -506,37 +521,13 @@ export default function ProfilePage() {
 
         <AnimatedSection index={1}>
           <View style={styles.statsRow}>
-            <StatBlock
-              label="XP"
-              value={String(totalXp)}
-              icon="star-four-points"
-              color={category.purple}
-              theme={theme}
-            />
+            <StatBlock label="XP" value={String(totalXp)} theme={theme} />
 
-            <StatBlock
-              label="Accuracy"
-              value={`${accuracy}%`}
-              icon="target"
-              color={category.green}
-              theme={theme}
-            />
+            <StatBlock label="Accuracy" value={`${accuracy}%`} theme={theme} />
 
-            <StatBlock
-              label="Study Time"
-              value={`${studyHours}h`}
-              icon="clock-outline"
-              color={category.blue}
-              theme={theme}
-            />
+            <StatBlock label="Study Time" value={`${studyHours}h`} theme={theme} />
 
-            <StatBlock
-              label="Materials"
-              value={String(totalMaterials)}
-              icon="file-document-outline"
-              color={category.orange}
-              theme={theme}
-            />
+            <StatBlock label="Materials" value={String(totalMaterials)} theme={theme} />
           </View>
         </AnimatedSection>
 
@@ -820,35 +811,34 @@ function PerformanceBar({
   );
 }
 
+/**
+ * One of the four summary numbers, on the page ground.
+ *
+ * Was a `<Card>` with a tinted icon plate, which made this screen carry four
+ * rounded, bordered surfaces for four non-interactive figures. The dashboard
+ * already settled this: its `WeekStat` renders the same kind of content as a
+ * bare value over a muted label, on the reasoning that four numbers do not
+ * need four surfaces and four icon plates. Practice's result screen does the
+ * same with `HeadlineStat`. This was the last screen still boxing them.
+ *
+ * Deliberately mirrors `WeekStat` rather than inventing a third treatment.
+ */
 function StatBlock({
   label,
   value,
-  icon,
-  color,
   theme,
 }: {
   label: string;
   value: string;
-  icon: IconName;
-  color: string;
   theme: Theme;
 }) {
   return (
-    <Card
-      backgroundColor={theme.card}
-      borderColor={theme.border}
-      shadowColor={theme.shadow}
-      radiusSize="lg"
-      elevationLevel={0}
-      style={styles.statBlock}
-    >
-      <View style={[styles.statIcon, { backgroundColor: withAlpha(color, 0.1) }]}>
-        <MaterialCommunityIcons name={icon} size={22} color={color} />
-      </View>
-
-      <Text style={[styles.statValue, { color: theme.text }]}>{value}</Text>
+    <View style={styles.statBlock}>
+      <Text style={[styles.statValue, { color: theme.text }]} numberOfLines={1}>
+        {value}
+      </Text>
       <Text style={[styles.statLabel, { color: theme.muted }]}>{label}</Text>
-    </Card>
+    </View>
   );
 }
 
@@ -957,31 +947,29 @@ const styles = StyleSheet.create({
 
   roleText: type.kicker,
 
+  // Mirrors dashboard's weekGrid exactly — same content, same treatment, so
+  // the two screens read as one product rather than two takes on a stat row.
   statsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.sm,
-    marginBottom: spacing.md,
+    rowGap: spacing.xl,
+    paddingHorizontal: spacing.xs,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xxl,
   },
 
   statBlock: {
-    width: "48%",
-    padding: spacing.md,
+    // Half width rather than flex: wrapping needs a resolved basis, and flex
+    // would keep all four on one line.
+    width: "50%",
   },
 
-  statIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.md,
-  },
-
-  statValue: type.title,
+  statValue: type.display,
 
   statLabel: {
     ...type.caption,
+    fontWeight: weight.regular,
+    letterSpacing: 0,
     marginTop: spacing.xxs,
   },
 

@@ -3,10 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // TODO: Enable when app is ready for production.
 // import * as ScreenCapture from "expo-screen-capture";
 import { Asset } from "expo-asset";
-import * as FileSystem from "expo-file-system/legacy";
-import * as Print from "expo-print";
 import { router, useLocalSearchParams } from "expo-router";
-import * as Sharing from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,7 +18,6 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
-import { WebView } from "react-native-webview";
 import { supabase } from "../../../lib/supabase";
 import { useScreenTime } from "../../screen-time";
 import { category, useThemeMode } from "../../theme";
@@ -31,6 +27,8 @@ import { Card } from "../../ui/Card";
 import { Folder } from "../../ui/Folder";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
+import { MaterialFrame } from "../../ui/MaterialFrame";
+import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import {
   layout,
@@ -349,11 +347,18 @@ async function getLogoDataUri(): Promise<string | null> {
       return null;
     }
 
-    const base64 = await FileSystem.readAsStringAsync(localUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
+    // fetch + FileReader rather than FileSystem.readAsStringAsync. The
+    // file-system module is a method-less shim on web, so the old call threw
+    // there and the summary silently lost its logo. This path reads the
+    // bundled asset over `file://` on native and over http on web.
+    const blob = await (await fetch(localUri)).blob();
 
-    logoDataUriCache = `data:image/png;base64,${base64}`;
+    logoDataUriCache = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   } catch (error) {
     console.log("LOGO EMBED SKIPPED:", error);
     logoDataUriCache = null;
@@ -1310,6 +1315,11 @@ export default function Study() {
     if (!hasText(material.summary_1)) return;
     const summary = material.summary_1 as string;
 
+    // Opened here, synchronously, while the tap is still the current user
+    // gesture. Every statement below this is async, and a popup requested
+    // after an await is blocked — which would leave nothing to print into.
+    const printWindow = openPrintWindow();
+
     setDownloadingSummaryId(material.id);
 
     try {
@@ -1341,48 +1351,23 @@ export default function Study() {
         summary,
       });
 
-      // Ask for base64 as well as the file. printToFileAsync writes to
-      // <cache>/Print/, which sits OUTSIDE the sandbox expo-file-system is
-      // scoped to in Expo Go (host.exp.exponent) — so anything that has to
-      // *read* that path is refused, which is why both copyAsync and
-      // shareAsync failed on it. Taking the bytes in memory sidesteps the
-      // read entirely; we then write them somewhere we do own.
-      const { uri, base64 } = await Print.printToFileAsync({ html, base64: true });
-
-      const safeName =
-        `${material.title}`
-          .replace(/[^a-z0-9]+/gi, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 60) || "summary";
-
-      let shareUri = uri;
-
-      if (base64) {
-        const target = `${FileSystem.cacheDirectory}${safeName}.pdf`;
-
-        await FileSystem.writeAsStringAsync(target, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        shareUri = target;
-      }
-
-      const available = await Sharing.isAvailableAsync();
-      if (available) {
-        await Sharing.shareAsync(shareUri, {
-          mimeType: "application/pdf",
-          dialogTitle: `${material.title} — LASU Scholar Summary`,
-          UTI: "com.adobe.pdf",
-        });
-      } else {
-        showAlert(
-          "info",
-          "Summary Ready",
-          "Your summary PDF was generated but sharing isn't available on this device."
-        );
-      }
+      // expo-print has no working web implementation: printToFileAsync there
+      // is `window.print(); return undefined`, and this line used to
+      // destructure { uri, base64 } straight off that. The browser's own
+      // print-to-PDF is the only route to a real PDF file, so drive it from a
+      // hidden iframe carrying the same HTML the native path renders.
+      // The title IS the suggested PDF filename — see print-html.ts.
+      await printHtmlDocument(html, summaryPrintTitle(material.title), printWindow);
     } catch (error: any) {
       console.log("SUMMARY PDF ERROR:", error);
+
+      // Never strand the blank popup we opened up front.
+      try {
+        if (printWindow && !printWindow.closed) printWindow.close();
+      } catch {
+        // Already gone.
+      }
+
       showAlert(
         "error",
         "Download Failed",
@@ -2481,22 +2466,11 @@ export default function Study() {
               </Text>
             </ScrollView>
           ) : kind === "image" && rawUrl ? (
-            <WebView
-              originWhitelist={["*"]}
-              source={{ html }}
-              style={styles.webView}
-              startInLoadingState
-              javaScriptEnabled
-              domStorageEnabled
-              mixedContentMode="always"
-              renderLoading={() => (
-                <View style={styles.webLoading}>
-                  <ActivityIndicator size="small" color={theme.orange} />
-                  <Text style={[styles.webLoadingText, { color: theme.muted }]}>
-                    Opening image...
-                  </Text>
-                </View>
-              )}
+            <MaterialFrame
+              key={rawUrl}
+              theme={theme}
+              html={html}
+              onOpenExternal={() => Linking.openURL(rawUrl)}
             />
           ) : url ? (
             <View style={{ flex: 1 }}>
@@ -2520,23 +2494,11 @@ export default function Study() {
                   </Text>
                 </View>
               )}
-              <WebView
-                source={{ uri: url }}
-                style={styles.webView}
-                startInLoadingState
-                javaScriptEnabled
-                domStorageEnabled
-                sharedCookiesEnabled
-                thirdPartyCookiesEnabled
-                mixedContentMode="always"
-                renderLoading={() => (
-                  <View style={styles.webLoading}>
-                    <ActivityIndicator size="small" color={theme.orange} />
-                    <Text style={[styles.webLoadingText, { color: theme.muted }]}>
-                      Opening material...
-                    </Text>
-                  </View>
-                )}
+              <MaterialFrame
+                key={url}
+                theme={theme}
+                url={url}
+                onOpenExternal={() => Linking.openURL(rawUrl)}
               />
             </View>
           ) : (

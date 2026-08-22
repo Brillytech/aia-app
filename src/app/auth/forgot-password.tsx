@@ -15,6 +15,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
+import { AUTH_REDIRECTS } from "../../auth-redirect";
 import { lightTheme } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
@@ -69,7 +70,7 @@ export default function ForgotPassword() {
       setLoading(true);
 
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-        redirectTo: "aiaapp://auth/reset-password",
+        redirectTo: AUTH_REDIRECTS.passwordReset(),
       });
 
       if (error) {

@@ -12,6 +12,7 @@ import {
 import Animated from "react-native-reanimated";
 import type { Theme } from "../theme";
 import type { IconName } from "./alerts";
+import { useDensity } from "./density";
 import { haptics } from "./haptics";
 import { elevation, motion, radius, spacing, type, weight, withAlpha } from "./tokens";
 
@@ -31,6 +32,7 @@ import { elevation, motion, radius, spacing, type, weight, withAlpha } from "./t
 
 const GLYPH = 22;
 const PLATE = 32;
+/** Phone touch target. The desktop value lives in useDensity(). */
 const ROW_MIN_HEIGHT = 52;
 
 /**
@@ -68,12 +70,14 @@ export function ListSection({
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { sectionGap } = useDensity();
+
   // Children.toArray drops null/undefined/false, so `{cond && <ListRow/>}`
   // yields the right divider count. Do not swap this for children.map.
   const items = Children.toArray(children);
 
   return (
-    <View style={[styles.section, style]}>
+    <View style={[styles.section, { marginBottom: sectionGap }, style]}>
       {title || action ? (
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: theme.muted }]}>
@@ -182,6 +186,7 @@ export function ListRow({
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { rowMinHeight } = useDensity();
   const [pressed, setPressed] = useState(false);
 
   const showChevron =
@@ -265,6 +270,7 @@ export function ListRow({
 
   const rowStyle = [
     styles.row,
+    { minHeight: rowMinHeight },
     destructive && styles.centeredRow,
     disabled && styles.disabled,
     style,

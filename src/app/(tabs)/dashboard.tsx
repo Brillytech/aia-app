@@ -1488,7 +1488,12 @@ export default function Dashboard() {
               courses, so there is no fuller list of *recommendations* to send
               anyone to — the destination would just be the study page they can
               already reach from the tab bar. Two rows, and they stand alone. */}
-          <ListSection theme={theme} title="Recommended">
+          {/* `plain`: two rows sitting between two bare blocks did not need a
+              card and a shadow of their own. Dividers still separate them —
+              only the surface goes — which leaves Account as the one card on
+              this screen, and it reads as deliberate rather than as the
+              default treatment. */}
+          <ListSection theme={theme} title="Recommended" plain>
             {recommendedMaterials.length === 0 ? (
               <ListRow
                 theme={theme}

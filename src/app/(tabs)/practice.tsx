@@ -3,7 +3,6 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 // import * as ScreenCapture from "expo-screen-capture";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
-import * as Sharing from "expo-sharing";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,7 +10,6 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Switch,
   Text,
@@ -31,6 +29,7 @@ import { category, Theme, useThemeMode } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
+import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Card } from "../../ui/Card";
 import { Folder } from "../../ui/Folder";
 import { haptics } from "../../ui/haptics";
@@ -924,6 +923,13 @@ export default function Practice() {
 
   async function shareResultCard() {
     try {
+      // Wait for the icon font before capturing. Established by spike test:
+      // html2canvas renders the offscreen card and its SVG ring correctly, but
+      // @expo/vector-icons draws through a webfont — capture before it loads
+      // and the medal, clock and XP glyphs come out blank. ViewShot's web path
+      // does not wait on its own.
+      await waitForFonts();
+
       const uri = await resultCardRef.current?.capture?.();
 
       if (!uri) {
@@ -942,27 +948,35 @@ ${getResultHeadline(percentage)}. ${getResultMiniNote(percentage)}
 Join LASU Scholar today and study smarter with CBT practice, course materials, exam prep and progress tracking.
 ${LASU_SCHOLAR_SHARE_LINK}`;
 
-      const available = await Sharing.isAvailableAsync();
+      // ViewShot returns a data URI on web. Web Share will not accept one as a
+      // `url`, which is why the old call silently failed — it needs a real
+      // File. shareOrDownloadBlob builds one, offers the share sheet where the
+      // browser supports files, and downloads otherwise.
+      const blob = await dataUrlToBlob(uri);
+      const fileName = `${safeFileName(selectedCourse?.code || "practice", "practice")}-result.png`;
 
-      if (available) {
-        await Sharing.shareAsync(uri, {
-          mimeType: "image/png",
-          dialogTitle: "Share LASU Scholar Practice Result",
-        });
-
-        showPracticeAlert({
-          type: "info",
-          title: "Caption Ready",
-          message: shareCaption,
-        });
-
-        return;
-      }
-
-      await Share.share({
-        message: shareCaption,
-        url: uri,
+      const outcome = await shareOrDownloadBlob(blob, fileName, {
         title: "LASU Scholar Practice Result",
+        text: shareCaption,
+      });
+
+      // "shared" means image and caption went out together — nothing more to
+      // say, and an alert on top of a completed share is just noise.
+      if (outcome === "shared" || outcome === "cancelled") return;
+
+      // Anywhere the caption could not travel with the image, put it on the
+      // clipboard so pasting is one keystroke rather than a retyping job. The
+      // copy can legitimately fail (clipboard needs a focused document and, in
+      // some browsers, a still-live user gesture), so only claim it worked
+      // when it did — otherwise fall back to showing the text.
+      const copied = await copyToClipboard(shareCaption);
+
+      showPracticeAlert({
+        type: "success",
+        title: outcome === "downloaded" ? "Result Card Saved" : "Result Card Shared",
+        message: copied
+          ? "Caption copied to your clipboard — just paste it with the image."
+          : `Caption to paste with your image:\n\n${shareCaption}`,
       });
     } catch (error) {
       console.log("SHARE RESULT ERROR:", error);
@@ -1187,9 +1201,11 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             </View>
           </View>
 
-          {/* Same controls as before, regrouped: the panel-inside-a-panel is
-              gone, and each field sits in a labelled section. */}
-          <ListSection theme={theme} title="Questions" inset={dividerInset.none}>
+          {/* One "Format" section, matching exam's setup screen. These were
+              two sections — "Questions" and "Duration" — which meant two cards
+              and two shadows for what is a single decision about the shape of
+              the session. */}
+          <ListSection theme={theme} title="Format" inset={dividerInset.none}>
             <ListRow
               theme={theme}
               label="How many"
@@ -1220,9 +1236,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                 />
               }
             />
-          </ListSection>
 
-          <ListSection theme={theme} title="Duration" inset={dividerInset.none}>
             <ListRow
               theme={theme}
               label="Hours"
@@ -1584,7 +1598,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
           <View style={styles.hiddenShareWrap}>
             {/* No `collapsable` prop — ViewShot already applies it to its own
                 inner view, and passing it here was a type error. */}
-            <ViewShot ref={resultCardRef} options={{ format: "png", quality: 1, result: "tmpfile" }}>
+            <ViewShot ref={resultCardRef} options={{ format: "png", quality: 1, result: "data-uri" }}>
               {renderCompactShareCard()}
             </ViewShot>
           </View>

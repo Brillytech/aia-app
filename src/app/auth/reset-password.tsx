@@ -1,6 +1,4 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import * as QueryParams from "expo-auth-session/build/QueryParams";
-import * as Linking from "expo-linking";
 import { Link, router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -48,80 +46,51 @@ export default function ResetPassword() {
 
   const [redirectAfterAlert, setRedirectAfterAlert] = useState<string | null>(null);
 
+  /**
+   * Establishes the recovery session from the emailed link.
+   *
+   * Previously this read the deep link with `Linking.getInitialURL()` and
+   * parsed the tokens by hand — the native pattern, where the OS hands the app
+   * a `aiaapp://` URL. In a browser the tokens arrive in the address bar and
+   * Supabase's `detectSessionInUrl` has already consumed them, stored the
+   * session, and cleaned the URL before this screen mounts. So there is
+   * nothing to parse: wait for the session, and time out if none arrives.
+   *
+   * Both a resolved session and the PASSWORD_RECOVERY event are handled,
+   * because which one wins the race depends on how quickly the token exchange
+   * completes relative to first paint.
+   */
   useEffect(() => {
-    prepareResetSession();
+    let active = true;
 
-    const subscription = Linking.addEventListener("url", ({ url }) => {
-      createSessionFromUrl(url);
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
-
-  async function prepareResetSession() {
-    try {
-      const currentUrl = await Linking.getInitialURL();
-
-      if (currentUrl) {
-        await createSessionFromUrl(currentUrl);
-        return;
-      }
-
-      const { data } = await supabase.auth.getSession();
-
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
       if (data.session) {
         setHasSession(true);
+        setSessionLoading(false);
       }
-    } catch (error: any) {
-      showAlert(
-        "error",
-        "Invalid Link",
-        error?.message || "This reset link is invalid or has expired."
-      );
-    } finally {
-      setSessionLoading(false);
-    }
-  }
+    });
 
-  async function createSessionFromUrl(url: string) {
-    const { params, errorCode } = QueryParams.getQueryParams(url);
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      if (session) {
+        setHasSession(true);
+        setSessionLoading(false);
+      }
+    });
 
-    if (errorCode) {
-      throw new Error(errorCode);
-    }
+    // An expired or already-used link produces no session at all. Without this
+    // the screen would sit on its spinner indefinitely.
+    const timeout = setTimeout(() => {
+      if (active) setSessionLoading(false);
+    }, 6000);
 
-    const { access_token, refresh_token, code } = params;
-
-    if (access_token && refresh_token) {
-      const { error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (error) throw error;
-      setHasSession(true);
-      return;
-    }
-
-    if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-
-      if (error) throw error;
-      setHasSession(true);
-      return;
-    }
-
-    const { data } = await supabase.auth.getSession();
-
-    if (data.session) {
-      setHasSession(true);
-      return;
-    }
-
-    setHasSession(false);
-  }
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      sub.subscription.unsubscribe();
+    };
+  }, []);
 
   function showAlert(type: AlertType, title: string, message: string) {
     setAlert({ visible: true, type, title, message });

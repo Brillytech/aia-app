@@ -1,7 +1,5 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import * as QueryParams from "expo-auth-session/build/QueryParams";
-import { Link, router } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
+import { Link } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -17,16 +15,13 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
+import { AUTH_REDIRECTS, routeAfterAuth } from "../../auth-redirect";
 import { lightTheme } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
 import { DevOnboardingReset } from "../../ui/DevOnboardingReset";
 import { Wordmark } from "../../ui/Wordmark";
 import { layout, motion, radius, spacing, type, weight } from "../../ui/tokens";
-
-WebBrowser.maybeCompleteAuthSession();
-
-const redirectTo = "aiaapp://auth/callback";
 
 type AlertType = "success" | "error" | "warning" | "info";
 
@@ -57,83 +52,39 @@ export default function Login() {
     setAlert((prev) => ({ ...prev, visible: false }));
   }
 
-  async function goToNextScreen(userId: string) {
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("profile_completed")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (profileError) {
-      showAlert("error", "Profile Error", profileError.message);
-      return;
-    }
-
-    if (!profile || !profile.profile_completed) {
-      router.replace("/complete-profile");
-      return;
-    }
-
-    router.replace("/dashboard");
+  // Post-login routing moved to `routeAfterAuth` in src/auth-redirect.ts so
+  // the OAuth callback route applies the identical rule. `createSessionFromUrl`
+  // is gone with it: on web Supabase reads the tokens out of the URL itself
+  // via `detectSessionInUrl`, so there is nothing left here to parse.
+  function goToNextScreen(userId: string) {
+    return routeAfterAuth(userId, (message) =>
+      showAlert("error", "Profile Error", message),
+    );
   }
 
-  async function createSessionFromUrl(url: string) {
-    const { params, errorCode } = QueryParams.getQueryParams(url);
-
-    if (errorCode) {
-      throw new Error(errorCode);
-    }
-
-    const { access_token, refresh_token, code } = params;
-
-    if (access_token && refresh_token) {
-      const { data, error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (error) throw error;
-      if (data.session?.user?.id) await goToNextScreen(data.session.user.id);
-      return;
-    }
-
-    if (code) {
-      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-
-      if (error) throw error;
-      if (data.session?.user?.id) await goToNextScreen(data.session.user.id);
-      return;
-    }
-
-    throw new Error("Google login could not complete. Please try again.");
-  }
-
+  /**
+   * On web this hands the whole tab to Google and never returns — the browser
+   * navigates away, and `/auth/callback` picks the session up afterwards.
+   *
+   * The old flow used `skipBrowserRedirect: true` plus
+   * `WebBrowser.openAuthSessionAsync`, which is the native pattern: open a
+   * system browser, wait for it to bounce back to a custom scheme, and read
+   * the tokens off the returned URL. In a browser there is no separate window
+   * to await and no custom scheme to catch, so that path just stalls.
+   */
   async function handleGoogleLogin() {
     try {
       setGoogleLoading(true);
 
-      console.log("Google redirect URL:", redirectTo);
-
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: {
-          redirectTo,
-          skipBrowserRedirect: true,
-        },
+        options: { redirectTo: AUTH_REDIRECTS.callback() },
       });
 
       if (error) throw error;
 
-      const result = await WebBrowser.openAuthSessionAsync(data?.url ?? "", redirectTo);
-
-      if (result.type === "success") {
-        await createSessionFromUrl(result.url);
-        return;
-      }
-
-      if (result.type === "cancel") {
-        showAlert("info", "Cancelled", "Google login was cancelled.");
-      }
+      // Reached only if the redirect did not happen. Leaving the spinner up
+      // would look like a hang.
     } catch (error: any) {
       showAlert(
         "error",

@@ -2,7 +2,6 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 // TODO: Enable when app is ready for production.
 // import * as ScreenCapture from "expo-screen-capture";
 import { router } from "expo-router";
-import * as Sharing from "expo-sharing";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -10,7 +9,6 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Switch,
   Text,
@@ -31,6 +29,7 @@ import type { AlertType } from "../../theme";
 import type { IconName } from "../../ui/alerts";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
+import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
@@ -855,20 +854,45 @@ Grade: ${grade.label} · ${correct}/${questions.length} correct · ${formatTime(
 https://lasuscholar.com`;
 
     try {
+      // See the note in practice.tsx: the icon font must be loaded before
+      // html2canvas captures, or the card's glyphs render blank.
+      await waitForFonts();
+
       const uri = await resultCardRef.current?.capture?.();
 
-      if (uri && (await Sharing.isAvailableAsync())) {
-        await Sharing.shareAsync(uri, {
-          mimeType: "image/png",
-          dialogTitle: "Share LASU Scholar Exam Result",
+      if (!uri) {
+        setExamPrompt({
+          title: "Result Card Not Ready",
+          message: "Please wait a moment and try sharing again.",
+          tone: "warning",
+          primaryText: "OK",
+          onPrimary: () => setExamPrompt(null),
         });
         return;
       }
 
-      await Share.share({
+      const blob = await dataUrlToBlob(uri);
+      const fileName = `${safeFileName(selectedCourse?.code || "exam", "exam")}-result.png`;
+
+      const outcome = await shareOrDownloadBlob(blob, fileName, {
         title: "LASU Scholar Exam Result",
-        message,
-        ...(uri ? { url: uri } : {}),
+        text: message,
+      });
+
+      // See the matching note in practice.tsx: nothing to add when the image
+      // and caption left together, and the clipboard keeps them close when
+      // they could not.
+      if (outcome === "shared" || outcome === "cancelled") return;
+
+      const copied = await copyToClipboard(message);
+
+      setExamPrompt({
+        title: outcome === "downloaded" ? "Result Card Saved" : "Result Card Shared",
+        message: copied
+          ? "Caption copied to your clipboard — just paste it with the image."
+          : `Caption to paste with your image:\n\n${message}`,
+        primaryText: "OK",
+        onPrimary: () => setExamPrompt(null),
       });
     } catch (error) {
       console.log("EXAM SHARE ERROR:", error);
@@ -1058,7 +1082,7 @@ https://lasuscholar.com`;
 
           {/* The paragraph went — it described the two facts already stated
               below it. Pool and Submit are real config and stay. */}
-          <ListSection theme={theme} title="Rules" inset={dividerInset.none}>
+          <ListSection theme={theme} title="Rules" inset={dividerInset.none} plain>
             <ListRow theme={theme} label="Question pool" value="All topics" chevron={false} />
             <ListRow theme={theme} label="On time up" value="Auto-submit" chevron={false} />
           </ListSection>
@@ -1417,7 +1441,7 @@ https://lasuscholar.com`;
             {/* Both breakdowns become real lists. BreakdownTable was a
                 hand-rolled table with its own header row and borders. */}
             {topicBreakdown.length > 0 ? (
-              <ListSection theme={theme} title="By topic" inset={dividerInset.none}>
+              <ListSection theme={theme} title="By topic" inset={dividerInset.none} plain>
                 {topicBreakdown.map((row) => (
                   <ListRow
                     key={row.topic}
@@ -1432,7 +1456,7 @@ https://lasuscholar.com`;
             ) : null}
 
             {difficultyBreakdown.length > 0 ? (
-              <ListSection theme={theme} title="By difficulty" inset={dividerInset.none}>
+              <ListSection theme={theme} title="By difficulty" inset={dividerInset.none} plain>
                 {difficultyBreakdown.map((row) => (
                   <ListRow
                     key={row.difficulty}
@@ -1451,7 +1475,7 @@ https://lasuscholar.com`;
             <View style={styles.hiddenShareWrap}>
               <ViewShot
                 ref={resultCardRef}
-                options={{ format: "png", quality: 1, result: "tmpfile" }}
+                options={{ format: "png", quality: 1, result: "data-uri" }}
               >
                 <ResultShareCard
                   theme={theme}

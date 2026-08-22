@@ -1,7 +1,5 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import * as QueryParams from "expo-auth-session/build/QueryParams";
 import { Link, router } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import { useState } from "react";
 import {
   ActivityIndicator,
@@ -17,15 +15,12 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
+import { AUTH_REDIRECTS } from "../../auth-redirect";
 import { lightTheme } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
 import { Wordmark } from "../../ui/Wordmark";
 import { layout, motion, radius, spacing, type, weight } from "../../ui/tokens";
-
-WebBrowser.maybeCompleteAuthSession();
-
-const redirectTo = "aiaapp://auth/callback";
 
 
 export default function Signup() {
@@ -67,61 +62,26 @@ export default function Signup() {
     }
   }
 
-  async function createSessionFromUrl(url: string) {
-    const { params, errorCode } = QueryParams.getQueryParams(url);
-
-    if (errorCode) {
-      throw new Error(errorCode);
-    }
-
-    const { access_token, refresh_token, code } = params;
-
-    if (access_token && refresh_token) {
-      const { error } = await supabase.auth.setSession({
-        access_token,
-        refresh_token,
-      });
-
-      if (error) throw error;
-      return;
-    }
-
-    if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) throw error;
-      return;
-    }
-
-    throw new Error("Google sign up could not complete. Please try again.");
-  }
-
+  /**
+   * Hands the tab to Google; `/auth/callback` resumes afterwards. See the
+   * matching note in auth/login.tsx for why the native
+   * `openAuthSessionAsync` pattern cannot work in a browser.
+   *
+   * The old code forced `/complete-profile` on return. It no longer does:
+   * `routeAfterAuth` checks `profile_completed`, so a returning Google user
+   * whose profile is already filled in goes straight to the dashboard instead
+   * of being sent back through setup.
+   */
   async function handleGoogleSignup() {
     try {
       setGoogleLoading(true);
 
-      console.log("Google redirect URL:", redirectTo);
-
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: {
-          redirectTo,
-          skipBrowserRedirect: true,
-        },
+        options: { redirectTo: AUTH_REDIRECTS.callback() },
       });
 
       if (error) throw error;
-
-      const result = await WebBrowser.openAuthSessionAsync(data?.url ?? "", redirectTo);
-
-      if (result.type === "success") {
-        await createSessionFromUrl(result.url);
-        router.replace("/complete-profile");
-        return;
-      }
-
-      if (result.type === "cancel") {
-        showAlert("info", "Cancelled", "Google sign up was cancelled.");
-      }
     } catch (error: any) {
       showAlert(
         "error",
@@ -152,7 +112,7 @@ export default function Signup() {
   email: cleanEmail,
   password,
   options: {
-    emailRedirectTo: "aiaapp://auth/login",
+    emailRedirectTo: AUTH_REDIRECTS.emailConfirm(),
   },
 });
 

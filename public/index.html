@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- viewport-fit=cover lets react-native-safe-area-context report real
+         insets on notched phones once the app is installed and running
+         fullscreen; without it the safe area is always zero. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover"
+    />
+
+    <title>LASU Scholar</title>
+    <meta
+      name="description"
+      content="Study materials, past questions, CBT practice and exam prep for LASU students."
+    />
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#F97316" />
+
+    <!-- iOS has never supported the manifest's display/icon fields; Safari
+         reads these instead, and they are what makes an added-to-home-screen
+         install open without browser chrome. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="LASU Scholar" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+
+    <!-- No hand-written icon link here on purpose: the CLI appends its own
+         from `web.favicon` in app.json at the end of the head, and the later
+         tag wins. The brand favicon is set through that config field. -->
+
+    <style>
+      /* This block is load-bearing, not cosmetic.
+         =========================================
+         With `web.output: "static"` Expo injects its own reset into every
+         generated page:
+
+             #root,body,html{height:100%}body{overflow:hidden}#root{display:flex}
+
+         Providing a custom template for `output: "single"` replaces that
+         page entirely, and the reset goes with it. Without an explicit height
+         on html and body, react-native-web's absolutely-positioned tree
+         contributes no height, the whole document collapses to 0px, and the
+         app renders perfectly into a viewport nobody can see — real DOM,
+         real form fields, no errors, blank screen.
+
+         Keep these three rules in sync with the reset quoted above. */
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        /* The app scrolls its own views; the document itself must not. */
+        overflow: hidden;
+        /* Paint the brand background immediately, so a cold start does not
+           flash white before the bundle mounts. Matches lightTheme.bg. */
+        background-color: #fbf7ef;
+      }
+
+      #root {
+        display: flex;
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- Expo mounts here — the id must stay `root`, it is what the injected
+         `expo-reset` stylesheet targets. -->
+    <div id="root"></div>
+
+    <!-- WARNING: do not write the closing body or head tags as literal text
+         anywhere in this file, including inside comments. The CLI injects the
+         bundle and stylesheet tags with String.replace against those exact
+         strings, which substitutes the FIRST match — an earlier mention in a
+         comment swallows the injection and the app silently never boots. -->
+  </body>
+</html>

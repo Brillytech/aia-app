@@ -523,9 +523,10 @@ export default function NotificationsPage() {
               }
             />
           ))}
-        </ListSection>
 
-        <ListSection theme={theme} title="Device">
+          {/* Was its own "Device" section — a card and a shadow around one
+              row. It belongs with the alert toggles it sits beside anyway:
+              both answer "what reaches me, and how". */}
           <ListRow
             theme={theme}
             icon="cellphone-message"

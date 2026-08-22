@@ -1,4 +1,5 @@
 import { router } from "expo-router";
+import { useInstallPrompt } from "../pwa/useInstallPrompt";
 import { useState } from "react";
 import { Linking, StyleSheet } from "react-native";
 import { supabase } from "../../lib/supabase";
@@ -26,6 +27,9 @@ const THEME_OPTIONS: readonly { value: ThemeMode; label: string }[] = [
 export default function SettingsPage() {
   const { mode, theme } = useThemeMode();
   const { isPremium } = usePremium();
+
+  // Keeps installing reachable after the banner has been dismissed.
+  const install = useInstallPrompt();
 
   const [loggingOut, setLoggingOut] = useState(false);
   const [alert, setAlert] = useState({
@@ -154,7 +158,11 @@ export default function SettingsPage() {
         onBack={() => router.back()}
         contentContainerStyle={styles.scroll}
       >
-        <ListSection theme={theme} title="Plan">
+        {/* Plan and Appearance were a section each, and each held exactly one
+            row — a card and a shadow wrapped around a single line. Merged,
+            they are one surface carrying two rows, which is what the card was
+            always for. */}
+        <ListSection theme={theme} title="Preferences">
           <ListRow
             theme={theme}
             icon="crown"
@@ -163,9 +171,7 @@ export default function SettingsPage() {
             value={isPremium ? "Premium member" : "Free"}
             onPress={() => router.push("/premium" as any)}
           />
-        </ListSection>
 
-        <ListSection theme={theme} title="Appearance">
           <ListRow
             theme={theme}
             icon="theme-light-dark"
@@ -179,6 +185,20 @@ export default function SettingsPage() {
               />
             }
           />
+
+          {/* Hidden once installed — there is nothing left to offer, and a row
+              reading "Installed" is noise. On iOS there is no prompt to fire,
+              so the row explains the manual route instead. */}
+          {install.installed ? null : (
+            <ListRow
+              theme={theme}
+              icon="cellphone-arrow-down"
+              label="Add to home screen"
+              value={install.needsIosInstructions ? "Share → Add to Home Screen" : undefined}
+              chevron={install.canPrompt}
+              onPress={install.canPrompt ? install.install : undefined}
+            />
+          )}
         </ListSection>
 
         <ListSection theme={theme} title="Account">

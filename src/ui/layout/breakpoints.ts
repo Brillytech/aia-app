@@ -28,9 +28,32 @@ export const DESKTOP_MIN_WIDTH = 1024;
  * means native can never fall into a desktop branch that has never been run
  * there, regardless of screen size.
  */
-export function useIsDesktop() {
+/**
+ * True at or above a width THIS SCREEN chooses.
+ *
+ * The single global `DESKTOP_MIN_WIDTH` was the wrong tool for layout: a
+ * screen should change shape when ITS content stops fitting, and that width
+ * differs per screen — settings can split into two panes at 880, premium's
+ * plan comparison needs about 820, a feed beside its preferences wants 1000.
+ * Forcing all of them to 1024 either strands the ones that could have split
+ * earlier or breaks the ones that need more room.
+ *
+ * Web-gated for the same reason as `useIsDesktop`: native is frozen and must
+ * never land in a branch that has not been run there.
+ *
+ * This reads window width via `useWindowDimensions`, so it resolves after
+ * hydration rather than in CSS. react-native-web has no CSS Grid and no media
+ * queries through RN styles, so layout here is flexbox driven by JS
+ * breakpoints — real reflow, but not a media query.
+ */
+export function useBreakpoint(min: number) {
   const { width } = useWindowDimensions();
-  return Platform.OS === "web" && width >= DESKTOP_MIN_WIDTH;
+  return Platform.OS === "web" && width >= min;
+}
+
+/** The app-wide "this is a desktop" switch — nav shape, column cap. */
+export function useIsDesktop() {
+  return useBreakpoint(DESKTOP_MIN_WIDTH);
 }
 
 const insetStyles = StyleSheet.create({

@@ -26,7 +26,15 @@ import { haptics } from "../../ui/haptics";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
 import { PageHeader } from "../../ui/PageHeader";
 import { Screen } from "../../ui/Screen";
-import { layout, radius, spacing, weight, withAlpha, type } from "../../ui/tokens";
+import {
+  layout,
+  noFocusRing,
+  radius,
+  spacing,
+  type,
+  weight,
+  withAlpha,
+} from "../../ui/tokens";
 
 type Profile = {
   id: string;
@@ -684,6 +692,7 @@ export default function ProfilePage() {
               placeholderTextColor={theme.muted}
               style={[
                 styles.reviewInput,
+                noFocusRing,
                 {
                   color: theme.text,
                   borderColor: theme.border,

@@ -23,7 +23,7 @@ import { PrimaryButton } from "../ui/Button";
 import { dividerInset, ListRow, ListSection } from "../ui/List";
 import { PageHeader } from "../ui/PageHeader";
 import { Screen } from "../ui/Screen";
-import { layout, spacing, type, weight } from "../ui/tokens";
+import { layout, noFocusRing, spacing, type, weight } from "../ui/tokens";
 
 type Profile = {
   id: string;
@@ -335,7 +335,7 @@ export default function EditProfilePage() {
                 placeholder="Enter username"
                 placeholderTextColor={theme.muted}
                 autoCapitalize="none"
-                style={[styles.input, { color: theme.text }]}
+                style={[styles.input, noFocusRing, { color: theme.text }]}
               />
             }
           />
@@ -349,7 +349,7 @@ export default function EditProfilePage() {
                 onChangeText={setFullName}
                 placeholder="Enter full name"
                 placeholderTextColor={theme.muted}
-                style={[styles.input, { color: theme.text }]}
+                style={[styles.input, noFocusRing, { color: theme.text }]}
               />
             }
           />

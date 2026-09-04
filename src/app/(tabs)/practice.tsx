@@ -24,6 +24,7 @@ import Reanimated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
+import { sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
 import { useContentInset } from "../../ui/layout/breakpoints";
@@ -611,9 +612,11 @@ export default function Practice() {
       })
       .filter(Boolean) as Course[];
 
-    const uniqueCourses = Array.from(
-      new Map([...directCourses, ...sharedCourses].map((course) => [course.id, course])).values()
-    ).filter((course) => (course.status || "active") === "active");
+    const uniqueCourses = sortCoursesAlphabetically(
+      Array.from(
+        new Map([...directCourses, ...sharedCourses].map((course) => [course.id, course])).values()
+      ).filter((course) => (course.status || "active") === "active")
+    );
 
     setCourses(uniqueCourses);
     setLoading(false);

@@ -1,3 +1,6 @@
+import { Platform } from "react-native";
+import type { TextStyle } from "react-native";
+
 // Shared design tokens. Every screen should pull spacing/radius/type values
 // from here instead of hardcoding numbers, so the whole app moves and looks
 // like one product instead of five different screens.
@@ -166,3 +169,17 @@ export function withAlpha(color: string, alpha: number): string {
 
   return color;
 }
+
+/**
+ * Suppresses the browser's own focus ring on a text input.
+ *
+ * react-native-web renders TextInput as a real <input>, and the browser draws
+ * its default focus outline on it. Every field in this app draws its own focus
+ * state on the surrounding container, so the browser ring appeared as a second
+ * box nested inside the first.
+ *
+ * Cast because outlineStyle is a web-only style React Native's types do not
+ * carry, and null on native so nothing changes there.
+ */
+export const noFocusRing =
+  Platform.OS === "web" ? ({ outlineStyle: "none" } as unknown as TextStyle) : null;

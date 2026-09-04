@@ -19,6 +19,7 @@ import {
   View
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
+import { sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
 import { category, useThemeMode } from "../../theme";
 import { useContentInset } from "../../ui/layout/breakpoints";
@@ -31,15 +32,7 @@ import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
 import { subjectColor, subjectIcon } from "../../ui/subject";
-import {
-  layout,
-  motion as motionTokens,
-  radius,
-  spacing,
-  type as typeScale,
-  weight,
-  withAlpha,
-} from "../../ui/tokens";
+import { layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
   id: string;
   code: string;
@@ -146,7 +139,9 @@ const fallbackMaterials: Material[] = [
 // "Summary" is no longer a tab — a summary belongs to the material it
 // summarises, so it now expands inline inside each material row instead of
 // living in a separate list that repeated every title.
-const tabs = ["Topics", "Questions", "Materials", "Cards"];
+// Materials before Questions: reading the material is the step that comes
+// first in the actual study flow, so the tab order now matches it.
+const tabs = ["Topics", "Materials", "Questions", "Cards"];
 
 /** Opacity ramp for the header's soft bottom edge, densest at the top. */
 const FADE_STEPS = [0.92, 0.72, 0.48, 0.26, 0.1, 0];
@@ -978,9 +973,11 @@ export default function Study() {
       })
       .filter(Boolean) as Course[];
 
-    const uniqueCourses = Array.from(
-      new Map([...directCourses, ...sharedCourses].map((course) => [course.id, course])).values()
-    ).filter((course) => (course.status || "active") === "active");
+    const uniqueCourses = sortCoursesAlphabetically(
+      Array.from(
+        new Map([...directCourses, ...sharedCourses].map((course) => [course.id, course])).values()
+      ).filter((course) => (course.status || "active") === "active")
+    );
 
     setCourses(uniqueCourses);
     setLoadingCourses(false);
@@ -1633,7 +1630,7 @@ export default function Study() {
             onChangeText={setSearch}
             placeholder="Search courses"
             placeholderTextColor={theme.muted}
-            style={[styles.searchInput, { color: theme.text }]}
+            style={[styles.searchInput, noFocusRing, { color: theme.text }]}
           />
           {search.length > 0 ? (
             <TouchableOpacity onPress={() => setSearch("")} hitSlop={10}>
@@ -1781,6 +1778,12 @@ export default function Study() {
           const tone = completed ? theme.success : selectedCourseTheme.color;
 
           return (
+            // One row per topic rather than a stacked card. The old version
+            // spent a 32pt row on a "Done"/"Open" pill and another on a
+            // full-width "Mark complete" button, both saying what the single
+            // checkbox on the right now says — roughly 130pt per topic for one
+            // line of information, so a course of ten topics was mostly
+            // chrome.
             <Card
               key={topic.id}
               onPress={() => openTopic(topic)}
@@ -1789,46 +1792,37 @@ export default function Study() {
               backgroundColor={theme.card}
               borderColor={theme.border}
               shadowColor={theme.shadow}
-              radiusSize="lg"
-              style={styles.topicCard}
+              radiusSize="md"
+              style={styles.topicRow}
             >
-              <View style={styles.topicHead}>
-                <View
-                  style={[
-                    styles.topicNumber,
-                    { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
-                  ]}
-                >
-                  <Text style={[styles.topicNumberText, { color: tone }]}>
-                    {index + 1}
-                  </Text>
-                </View>
+              <View
+                style={[
+                  styles.topicNumber,
+                  { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
+                ]}
+              >
+                <Text style={[styles.topicNumberText, { color: tone }]}>
+                  {index + 1}
+                </Text>
+              </View>
 
+              <View style={styles.topicRowText}>
                 <Text
+                  numberOfLines={1}
                   style={[styles.topicTitle, { color: theme.text }]}
                 >
                   {topic.title}
                 </Text>
 
-                <View
-                  style={[
-                    styles.topicStatusTag,
-                    { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
-                  ]}
-                >
-                  <Text style={[styles.topicStatusText, { color: tone }]}>
-                    {completed ? "Done" : "Open"}
+                {topic.description ? (
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.topicDesc, { color: theme.muted }]}
+                  >
+                    {topic.description}
                   </Text>
-                </View>
+                ) : null}
               </View>
-
-              {topic.description ? (
-                <Text
-                  style={[styles.topicDesc, { color: theme.muted }]}
-                >
-                  {topic.description}
-                </Text>
-              ) : null}
 
               <TouchableOpacity
                 onPress={(event) => {
@@ -1836,8 +1830,16 @@ export default function Study() {
                   toggleTopicCompletion(topic);
                 }}
                 disabled={saving}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityState={{ checked: completed }}
+                accessibilityLabel={
+                  completed
+                    ? `Mark ${topic.title} not complete`
+                    : `Mark ${topic.title} complete`
+                }
                 style={[
-                  styles.markCompleteBtn,
+                  styles.topicComplete,
                   { backgroundColor: withAlpha(tone, isDark ? 0.22 : 0.14) },
                 ]}
               >
@@ -1846,11 +1848,11 @@ export default function Study() {
                 ) : (
                   <>
                     <MaterialCommunityIcons
-                      name={completed ? "check" : "check-circle-outline"}
-                      size={16}
+                      name={completed ? "check-circle" : "check-circle-outline"}
+                      size={15}
                       color={tone}
                     />
-                    <Text style={[styles.markCompleteText, { color: tone }]}>
+                    <Text style={[styles.topicCompleteText, { color: tone }]}>
                       {completed ? "Completed" : "Mark complete"}
                     </Text>
                   </>
@@ -2743,41 +2745,42 @@ const styles = StyleSheet.create({
     ...typeScale.body,
     fontWeight: weight.semi,
   },
-  topicHead: {
+  // One compact row per topic. The number badge is the admin's ordering,
+  // the checkbox is the completion state, and nothing else earns a line.
+  topicRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
-  topicStatusTag: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xxs,
-    borderRadius: radius.pill,
+  topicRowText: {
+    flex: 1,
+    gap: spacing.xxs,
   },
-  topicStatusText: {
-    ...typeScale.micro,
-    letterSpacing: 0.2,
-  },
-  markCompleteBtn: {
-    alignSelf: "flex-start",
-    marginTop: spacing.md,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  // The completion control keeps its text label — a bare checkbox leaves the
+  // reader to infer what ticking it means. It sits inline on the row rather
+  // than on its own line below, which is where the height went before.
+  //
+  // flexShrink: 0 so a long topic title truncates instead of squeezing the
+  // label to the point where it wraps.
+  topicComplete: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    minHeight: 36,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    minHeight: 32,
+    flexShrink: 0,
   },
-  markCompleteText: {
+  topicCompleteText: {
     ...typeScale.caption,
     letterSpacing: 0,
   },
-  topicCard: {
-    padding: spacing.lg,
-  },
   topicNumber: {
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     borderRadius: radius.sm,
     alignItems: "center",
     justifyContent: "center",
@@ -2786,15 +2789,13 @@ const styles = StyleSheet.create({
     ...typeScale.bodyStrong,
   },
   topicTitle: {
-    ...typeScale.bodyLg,
+    ...typeScale.body,
     fontWeight: weight.semi,
-    flex: 1,
   },
   topicDesc: {
     ...typeScale.caption,
     fontWeight: weight.regular,
     letterSpacing: 0,
-    marginTop: spacing.sm,
   },
   materialCard: {
     padding: spacing.lg,

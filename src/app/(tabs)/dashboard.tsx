@@ -31,6 +31,7 @@ import { subjectColor, subjectIcon } from "../../ui/subject";
 import {
   layout,
   motion as motionTokens,
+  noFocusRing,
   radius,
   shade,
   spacing,
@@ -1645,6 +1646,7 @@ function GoalInput({
         onChangeText={(text) => onChange(Number(text.replace(/[^0-9]/g, "")) || 0)}
         style={[
           styles.goalInput,
+          noFocusRing,
           {
             color: theme.text,
             borderColor: theme.border,

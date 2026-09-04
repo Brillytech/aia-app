@@ -1,20 +1,37 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ReactNode, useState } from "react";
+import {
+  Pressable,
+  StyleProp,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  ViewStyle,
+} from "react-native";
 import Animated from "react-native-reanimated";
 import type { Theme } from "../theme";
 import type { IconName } from "./alerts";
 import { motion, noFocusRing, radius, spacing, type, weight, withAlpha } from "./tokens";
 
 /**
- * The app's auth input.
+ * The app's text input.
  *
- * The four auth screens each hand-rolled their own field with no focus state
- * at all — you couldn't tell which input you were typing into. This one lifts
- * and tints its border on focus, so the active field is unambiguous, and it
- * owns the password reveal so that logic stops being copy-pasted.
+ * `AuthField` already solved this for the four auth screens, but every other
+ * input in the app was hand-rolled: dashboard's goal input, profile's review
+ * box, study's search, both edit-profile fields and `Stepper` each built their
+ * own. That is why the browser focus-ring bug had to be fixed in six places —
+ * there was no one field to fix.
+ *
+ * This generalises `AuthField` rather than replacing it in place: the auth
+ * screens are proven and can migrate when their own redesign lands.
+ * Everything new should use this.
+ *
+ * Focus lives on the container, never the inner input — `noFocusRing`
+ * suppresses the browser's own outline, which would otherwise draw a second
+ * box inside this one.
  */
-export function AuthField({
+export function Field({
   theme,
   label,
   icon,
@@ -22,26 +39,40 @@ export function AuthField({
   onChangeText,
   placeholder,
   secure,
+  multiline,
+  rows = 4,
   keyboardType,
   autoCapitalize = "none",
   autoComplete,
+  editable = true,
   error,
+  hint,
   right,
+  style,
 }: {
   theme: Theme;
-  label: string;
+  /** Omit for a bare field — a search box, an inline editor. */
+  label?: string;
   icon?: IconName;
   value: string;
   onChangeText: (next: string) => void;
   placeholder?: string;
   /** Renders the reveal toggle and starts masked. */
   secure?: boolean;
-  keyboardType?: "default" | "email-address" | "number-pad";
+  multiline?: boolean;
+  /** Visible rows when `multiline`. */
+  rows?: number;
+  keyboardType?: "default" | "email-address" | "number-pad" | "phone-pad";
   autoCapitalize?: "none" | "sentences" | "words";
-  autoComplete?: "email" | "password" | "name" | "off";
+  autoComplete?: "email" | "password" | "name" | "tel" | "off";
+  editable?: boolean;
+  /** Replaces `hint` while set, and tones the border. */
   error?: string;
-  /** Extra control on the label row — "Forgot?", for instance. */
-  right?: React.ReactNode;
+  /** Quiet helper text under the field. */
+  hint?: string;
+  /** Extra control on the label row — a "Forgot?" link, a counter. */
+  right?: ReactNode;
+  style?: StyleProp<ViewStyle>;
 }) {
   const [focused, setFocused] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -50,26 +81,33 @@ export function AuthField({
   const tone = error ? theme.error : focused ? theme.accent : theme.border;
 
   return (
-    <View style={styles.block}>
-      <View style={styles.labelRow}>
-        <Text style={[styles.label, { color: theme.muted }]}>{label}</Text>
-        {right}
-      </View>
+    <View style={[styles.block, style]}>
+      {label || right ? (
+        <View style={styles.labelRow}>
+          {label ? (
+            <Text style={[styles.label, { color: theme.muted }]}>{label}</Text>
+          ) : (
+            <View />
+          )}
+          {right}
+        </View>
+      ) : null}
 
       <Animated.View
         style={[
           styles.field,
+          multiline && styles.fieldMultiline,
           {
             backgroundColor: focused
               ? withAlpha(theme.accent, dark ? 0.1 : 0.06)
               : theme.input,
             borderColor: tone,
-            // Widening the border on focus rather than adding a glow keeps
-            // the row height stable — a glow would shift the layout.
+            // Widening rather than glowing keeps the row height stable.
             borderWidth: focused || error ? 1.5 : StyleSheet.hairlineWidth,
             transitionProperty: "background-color, border-color",
             transitionDuration: motion.fast,
           },
+          !editable && styles.disabled,
         ]}
       >
         {icon ? (
@@ -88,11 +126,19 @@ export function AuthField({
           placeholder={placeholder}
           placeholderTextColor={theme.muted}
           secureTextEntry={secure && !revealed}
+          multiline={multiline}
+          numberOfLines={multiline ? rows : undefined}
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize}
           autoComplete={autoComplete}
           autoCorrect={false}
-          style={[styles.input, noFocusRing, { color: theme.text }]}
+          editable={editable}
+          style={[
+            styles.input,
+            multiline && { height: rows * 20, textAlignVertical: "top" },
+            noFocusRing,
+            { color: theme.text },
+          ]}
         />
 
         {secure ? (
@@ -106,8 +152,10 @@ export function AuthField({
         ) : null}
       </Animated.View>
 
-      {error ? (
-        <Text style={[styles.error, { color: theme.error }]}>{error}</Text>
+      {error || hint ? (
+        <Text style={[styles.helper, { color: error ? theme.error : theme.muted }]}>
+          {error || hint}
+        </Text>
       ) : null}
     </View>
   );
@@ -134,9 +182,11 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
-    // 50 rather than 54 — four of these stack up on the signup form, and it
-    // still clears the 44pt minimum touch target comfortably.
     minHeight: 50,
+  },
+  fieldMultiline: {
+    alignItems: "flex-start",
+    paddingVertical: spacing.md,
   },
   input: {
     flex: 1,
@@ -145,7 +195,10 @@ const styles = StyleSheet.create({
     // Android's intrinsic padding would push past the field height.
     paddingVertical: 0,
   },
-  error: {
+  disabled: {
+    opacity: 0.55,
+  },
+  helper: {
     ...type.caption,
     fontWeight: weight.regular,
     letterSpacing: 0,

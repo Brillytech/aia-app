@@ -15,10 +15,12 @@ import { supabase } from "../../lib/supabase";
 import { AlertType, category, Theme, useThemeMode } from "../theme";
 import { AlertModal } from "../ui/AlertModal";
 import type { IconName } from "../ui/alerts";
-import { dividerInset, ListRow, ListSection } from "../ui/List";
+import { Row, Rows } from "../ui/Rows";
 import { PageHeader } from "../ui/PageHeader";
+import { useBreakpoint } from "../ui/layout/breakpoints";
+import { SplitPane } from "../ui/layout/SplitPane";
 import { Screen } from "../ui/Screen";
-import { layout, radius, spacing, type } from "../ui/tokens";
+import { layout, radius, spacing, type, weight } from "../ui/tokens";
 
 type NotificationItem = {
   id: string;
@@ -69,6 +71,15 @@ const DEFAULT_PREFS: Record<PreferenceKey, boolean> = {
 
 // Subtitles removed: all five restated their own title ("Study Reminders" /
 // "Gentle nudges to continue your study streak."). The switch is the content.
+/**
+ * Width at which the alert toggles move out of the feed and beside it.
+ *
+ * Higher than settings' 880: this needs a readable feed column AND a rail
+ * wide enough for a label plus a switch, which does not fit until about here.
+ * A feed squeezed to make room for preferences would be a worse trade.
+ */
+const NOTIFICATIONS_SPLIT = 1000;
+
 const PREFERENCES: NotificationPreference[] = [
   { key: "study_reminders", title: "Study reminders", icon: "book-clock-outline" },
   { key: "practice_streaks", title: "Practice streaks", icon: "fire" },
@@ -127,6 +138,7 @@ function getNotificationColor(type: string | null | undefined, theme: Theme) {
 
 export default function NotificationsPage() {
   const { theme } = useThemeMode();
+  const wide = useBreakpoint(NOTIFICATIONS_SPLIT);
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [preferences, setPreferences] = useState<Record<PreferenceKey, boolean>>(DEFAULT_PREFS);
@@ -431,7 +443,7 @@ export default function NotificationsPage() {
   return (
     <Screen backgroundColor={theme.bg}>
       <PageHeader
-        measure="prose"
+        measure={wide ? "app" : "prose"}
         theme={theme}
         title="Notifications"
         onBack={() => router.back()}
@@ -454,10 +466,113 @@ export default function NotificationsPage() {
           ) : null
         }
       >
-        <ListSection
+        {wide ? (
+          <SplitPane
+            theme={theme}
+            // Preferences follow the feed: the feed is what the screen is for,
+            // and a settings rail leading the page would invert that.
+            side="end"
+            railWidth={280}
+            divider={false}
+            rail={
+              <View>
+                <Text style={[styles.railTitle, { color: theme.muted }]}>Alerts</Text>
+            <Rows theme={theme} title={wide ? undefined : "Alerts"}>
+              {PREFERENCES.map((item) => (
+                <Row
+                  key={item.key}
+                  theme={theme}
+                  icon={item.icon}
+                  label={item.title}
+                  accessory={
+                    <Switch
+                      value={preferences[item.key]}
+                      onValueChange={() => togglePreference(item.key)}
+                      disabled={savingPrefs}
+                      trackColor={{ false: theme.soft, true: theme.accent }}
+                      thumbColor={theme.card}
+                      ios_backgroundColor={theme.soft}
+                    />
+                  }
+                />
+              ))}
+
+              {/* Was its own "Device" section — a card and a shadow around one
+                  row. It belongs with the alert toggles it sits beside anyway:
+                  both answer "what reaches me, and how". */}
+              <Row
+                theme={theme}
+                icon="cellphone-message"
+                label="Push notifications"
+                value={wide ? undefined : "Not connected"}
+                secondary={wide ? "Not connected" : undefined}
+                onPress={() =>
+                  showAlert(
+                    "info",
+                    "Push Notifications",
+                    "Device push notifications will be connected before the final production build."
+                  )
+                }
+              />
+            </Rows>
+              </View>
+            }
+          >
+          <Rows
+            theme={theme}
+            title={unreadOnly ? "Unread" : "Recent"}
+            action={
+              unreadCount > 0 || unreadOnly
+                ? {
+                    label: unreadOnly ? "Show all" : `${unreadCount} unread`,
+                    onPress: () => setUnreadOnly((prev) => !prev),
+                  }
+                : undefined
+            }
+          >
+            {visibleNotifications.length === 0 ? (
+              <Row
+                theme={theme}
+                icon={unreadOnly ? "check-circle-outline" : "bell-sleep-outline"}
+                label={unreadOnly ? "Nothing unread" : "No notifications yet"}
+                chevron={false}
+              />
+            ) : (
+              visibleNotifications.map((item) => {
+                const read = isRead(item);
+
+                return (
+                  <Row
+                    key={item.id}
+                    theme={theme}
+                    icon={getNotificationIcon(item.type)}
+                    iconColor={getNotificationColor(item.type, theme)}
+                    label={item.title}
+                    secondary={item.message}
+                    value={formatDate(item.created_at)}
+                    chevron={Boolean(item.action_url)}
+                    accessory={
+                      read ? undefined : (
+                        <View
+                          style={[
+                            styles.unreadDot,
+                            { backgroundColor: getNotificationColor(item.type, theme) },
+                          ]}
+                        />
+                      )
+                    }
+                    onPress={() => openNotification(item)}
+                  />
+                );
+              })
+            )}
+          </Rows>
+          </SplitPane>
+        ) : (
+          <>
+        <Rows
           theme={theme}
           title={unreadOnly ? "Unread" : "Recent"}
-          inset={dividerInset.plate}
           action={
             unreadCount > 0 || unreadOnly
               ? {
@@ -468,7 +583,7 @@ export default function NotificationsPage() {
           }
         >
           {visibleNotifications.length === 0 ? (
-            <ListRow
+            <Row
               theme={theme}
               icon={unreadOnly ? "check-circle-outline" : "bell-sleep-outline"}
               label={unreadOnly ? "Nothing unread" : "No notifications yet"}
@@ -479,7 +594,7 @@ export default function NotificationsPage() {
               const read = isRead(item);
 
               return (
-                <ListRow
+                <Row
                   key={item.id}
                   theme={theme}
                   icon={getNotificationIcon(item.type)}
@@ -503,11 +618,11 @@ export default function NotificationsPage() {
               );
             })
           )}
-        </ListSection>
+        </Rows>
 
-        <ListSection theme={theme} title="Alerts">
+        <Rows theme={theme} title="Alerts">
           {PREFERENCES.map((item) => (
-            <ListRow
+            <Row
               key={item.key}
               theme={theme}
               icon={item.icon}
@@ -528,7 +643,7 @@ export default function NotificationsPage() {
           {/* Was its own "Device" section — a card and a shadow around one
               row. It belongs with the alert toggles it sits beside anyway:
               both answer "what reaches me, and how". */}
-          <ListRow
+          <Row
             theme={theme}
             icon="cellphone-message"
             label="Push notifications"
@@ -541,7 +656,9 @@ export default function NotificationsPage() {
               )
             }
           />
-        </ListSection>
+        </Rows>
+          </>
+        )}
       </PageHeader>
 
       <AlertModal
@@ -570,6 +687,14 @@ const styles = StyleSheet.create({
   },
   loadingTitle: {
     ...type.body,
+  },
+  // The rail's own label. Not a Rows title — that sits inside the group,
+  // and here the group IS the rail.
+  railTitle: {
+    ...type.caption,
+    fontWeight: weight.medium,
+    letterSpacing: 0,
+    marginBottom: spacing.sm,
   },
   unreadDot: {
     width: spacing.sm,

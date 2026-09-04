@@ -2,7 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { Theme } from "../theme";
 import { haptics } from "./haptics";
-import { radius, spacing, type, weight, withAlpha } from "./tokens";
+import { noFocusRing, radius, spacing, type, weight, withAlpha } from "./tokens";
 
 /**
  * A number field that looks like one.
@@ -64,7 +64,7 @@ export function Stepper({
         placeholder={placeholder}
         placeholderTextColor={theme.muted}
         selectTextOnFocus
-        style={[styles.input, { color: theme.text }]}
+        style={[styles.input, noFocusRing, { color: theme.text }]}
       />
 
       <Pressable

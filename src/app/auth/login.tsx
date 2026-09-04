@@ -20,7 +20,6 @@ import { lightTheme } from "../../theme";
 import { useMeasure } from "../../ui/layout/measure";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
-import { DevOnboardingReset } from "../../ui/DevOnboardingReset";
 import { Wordmark } from "../../ui/Wordmark";
 import { layout, motion, radius, spacing, type, weight } from "../../ui/tokens";
 
@@ -248,7 +247,6 @@ export default function Login() {
 
           {/* Stripped from release bundles: Metro inlines `__DEV__` as a
               literal `false`, so the minifier drops this branch entirely. */}
-          {__DEV__ ? <DevOnboardingReset theme={theme} /> : null}
         </ScrollView>
       </KeyboardAvoidingView>
 

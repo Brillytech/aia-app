@@ -431,6 +431,7 @@ export default function NotificationsPage() {
   return (
     <Screen backgroundColor={theme.bg}>
       <PageHeader
+        measure="prose"
         theme={theme}
         title="Notifications"
         onBack={() => router.back()}

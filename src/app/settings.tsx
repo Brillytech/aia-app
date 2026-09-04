@@ -153,6 +153,7 @@ export default function SettingsPage() {
   return (
     <Screen backgroundColor={theme.bg}>
       <PageHeader
+        measure="prose"
         theme={theme}
         title="Settings"
         onBack={() => router.back()}

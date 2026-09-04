@@ -17,6 +17,7 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { usePremium } from "../../premium";
 import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import { AlertModal } from "../../ui/AlertModal";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
@@ -69,6 +70,7 @@ const FALLBACK_PROFILE: Profile = {
 };
 
 export default function ProfilePage() {
+  const contentInset = useContentInset();
   const { theme } = useThemeMode();
   const { isPremium } = usePremium();
 
@@ -457,8 +459,9 @@ export default function ProfilePage() {
       <PageHeader
         theme={theme}
         title="Profile"
+        measure="app"
         onBack={() => router.back()}
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, contentInset]}
         right={
           <Pressable onPress={() => router.push("/settings")} hitSlop={12}>
             <MaterialCommunityIcons name="cog-outline" size={22} color={theme.text} />

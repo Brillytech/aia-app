@@ -4,6 +4,7 @@ import { useInstallPrompt } from "../pwa/useInstallPrompt";
 import { useServiceWorker } from "../pwa/useServiceWorker";
 import { useThemeMode } from "../theme";
 import { AppBanner } from "../ui/AppBanner";
+import { useIsDesktop } from "../ui/layout/breakpoints";
 import { elevation, shade } from "../ui/tokens";
 
 /**
@@ -31,6 +32,13 @@ const COLUMN_MAX_WIDTH = 480;
 export default function RootLayout() {
   const { theme } = useThemeMode();
   const dark = theme.mode === "dark";
+
+  // Above 1024 the column stops being the design and starts being a cage: the
+  // sidebar and a two-pane screen cannot live inside 480px. The letterboxing
+  // below — surround tint, hairline edges, elevation — exists to make a narrow
+  // column look deliberate, and all of it is wrong once the app fills the
+  // viewport, so it is switched off as a set rather than piecemeal.
+  const desktop = useIsDesktop();
 
   const { updateReady, applyUpdate } = useServiceWorker();
   const install = useInstallPrompt();
@@ -64,14 +72,21 @@ export default function RootLayout() {
   const columnBg = dark ? shade(theme.bg, 0.05) : theme.bg;
 
   return (
-    <View style={[styles.backdrop, { backgroundColor: surround }]}>
+    <View
+      style={[styles.backdrop, { backgroundColor: desktop ? columnBg : surround }]}
+    >
       <View
         style={[
           styles.column,
+          // A second StyleSheet entry rather than inline overrides, so that on
+          // phone widths this entry is `false` and the array flattens to
+          // exactly `styles.column` — byte-identical markup to before this
+          // change, which is what the 390px DOM diff checks.
+          desktop && styles.columnDesktop,
           {
             backgroundColor: columnBg,
             borderColor: theme.border,
-            ...elevation(3, theme.shadow),
+            ...(desktop ? null : elevation(3, theme.shadow)),
           },
         ]}
       >
@@ -136,5 +151,12 @@ const styles = StyleSheet.create({
     // nothing.
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  // Real values, not `undefined` — a later entry in a style array only wins
+  // where it actually declares the property.
+  columnDesktop: {
+    maxWidth: "100%",
+    borderLeftWidth: 0,
+    borderRightWidth: 0,
   },
 });

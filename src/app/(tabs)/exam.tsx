@@ -24,6 +24,7 @@ import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import { AlertModal } from "../../ui/AlertModal";
 import type { AlertType } from "../../theme";
 import type { IconName } from "../../ui/alerts";
@@ -267,6 +268,7 @@ function getCourseTheme(course?: Course | null) {
 }
 
 export default function Exam() {
+  const contentInset = useContentInset();
   const { theme, isDark } = useThemeMode();
 
   const [screen, setScreen] = useState<ExamScreen>("setup");
@@ -971,7 +973,7 @@ https://lasuscholar.com`;
         <ScrollView
           ref={setupScrollRef}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.setupScrollFixed}
+          contentContainerStyle={[styles.setupScrollFixed, contentInset]}
         >
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: text }]}>Course</Text>
@@ -1233,7 +1235,7 @@ https://lasuscholar.com`;
           </ScrollView>
         </View>
 
-        <ScrollView contentContainerStyle={styles.questionPaper}>
+        <ScrollView contentContainerStyle={[styles.questionPaper, contentInset]}>
           <Animated.View
             style={{ opacity: fade, transform: [{ translateY: slide }] }}
           >
@@ -1387,7 +1389,7 @@ https://lasuscholar.com`;
   if (screen === "result") {
     return (
       <View style={[styles.screen, { backgroundColor: bg }]}> 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.resultScroll}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.resultScroll, contentInset]}>
           <Animated.View style={{ opacity: resultFade, transform: [{ translateY: resultLift }] }}>
             {/* Course identity first and quietly, then the score alone. The
                 old hero boxed all of it together, so the percentage competed

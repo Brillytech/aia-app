@@ -26,6 +26,7 @@ import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import { AlertModal } from "../../ui/AlertModal";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
@@ -272,6 +273,7 @@ function calculatePracticeXp({
 }
 
 export default function Practice() {
+  const contentInset = useContentInset();
   const { theme, isDark } = useThemeMode();
 
   const [screen, setScreen] = useState<Screen>("courses");
@@ -1121,7 +1123,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   if (screen === "topics") {
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }]}>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}>
           <TouchableOpacity onPress={() => setScreen("courses")} activeOpacity={0.86} style={styles.backBtn}>
             <View style={[styles.backIconWrap, { backgroundColor: theme.card, borderColor: theme.border }]}>
               <MaterialCommunityIcons name="chevron-left" size={24} color={theme.text} />
@@ -1189,7 +1191,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   if (screen === "setup") {
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }]}>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}>
           <View style={styles.headerRow}>
             <BackButton theme={theme} onPress={() => setScreen("topics")} />
 
@@ -1305,7 +1307,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   if (screen === "confirm") {
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }]}>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}>
           <View style={styles.headerRow}>
             <BackButton theme={theme} onPress={() => setScreen("setup")} />
             <Text style={[styles.pageTitle, { color: theme.text }]}>Ready?</Text>
@@ -1529,7 +1531,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   if (screen === "result") {
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }]} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]} showsVerticalScrollIndicator={false}>
           {/* The score is the whole point of this screen, so it gets the
               screen — not a row in an eight-cell grid. The brand lockup and
               the "lasuscholar.com" footer moved out entirely: they belong on

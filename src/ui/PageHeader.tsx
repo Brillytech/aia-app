@@ -18,6 +18,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../theme";
+import { useMeasure, type Measure } from "./layout/measure";
 import { haptics } from "./haptics";
 import { layout, spacing, type, weight } from "./tokens";
 
@@ -58,6 +59,7 @@ export function PageHeader({
   intro,
   children,
   contentContainerStyle,
+  measure = "full",
   ...scrollProps
 }: {
   theme: Theme;
@@ -73,8 +75,16 @@ export function PageHeader({
   intro?: ReactNode;
   children: ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
+  /**
+   * How wide the page content may get on desktop. Constrains the scroll
+   * content AND the pinned bar row together, so the back button stays aligned
+   * with the content instead of drifting to the far edge of a wide viewport.
+   * Defaults to "full", which is a no-op — existing callers are unaffected.
+   */
+  measure?: Measure;
 } & Omit<ScrollViewProps, "contentContainerStyle" | "children" | "ref">) {
   const insets = useSafeAreaInsets();
+  const measureStyle = useMeasure(measure);
 
   // useScrollOffset over useAnimatedScrollHandler: it hands back a shared value
   // directly, so this file performs zero `.value` writes — the pattern that
@@ -135,7 +145,7 @@ export function PageHeader({
           </Animated.View>
         )}
 
-        <View style={styles.barRow}>
+        <View style={[styles.barRow, measureStyle]}>
           {bar ?? (
             <>
               {onBack ? (
@@ -166,6 +176,7 @@ export function PageHeader({
         contentContainerStyle={[
           { paddingTop: insets.top + BAR_HEIGHT },
           contentContainerStyle,
+          measureStyle,
         ]}
       >
         <Animated.View style={[styles.largeTitleWrap, largeTitleStyle]}>

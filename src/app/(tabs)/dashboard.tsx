@@ -14,6 +14,7 @@ import {
 import Reanimated from "react-native-reanimated";
 import { supabase } from "../../../lib/supabase";
 import { category, Theme, useThemeMode } from "../../theme";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import type { IconName } from "../../ui/alerts";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
@@ -143,6 +144,7 @@ function getMaterialIcon(type?: string | null): IconName {
 }
 
 export default function Dashboard() {
+  const contentInset = useContentInset();
   const { theme, isDark } = useThemeMode();
 
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -1057,7 +1059,7 @@ export default function Dashboard() {
     <Screen backgroundColor={theme.bg}>
       <PageHeader
         theme={theme}
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, contentInset]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl

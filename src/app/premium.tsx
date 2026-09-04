@@ -64,6 +64,7 @@ export default function PremiumPage() {
   return (
     <Screen backgroundColor={theme.bg}>
       <PageHeader
+        measure="feed"
         theme={theme}
         title="Premium"
         onBack={() => router.back()}

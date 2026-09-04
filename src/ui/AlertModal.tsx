@@ -9,6 +9,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { AlertType, Theme } from "../theme";
 import { alertColor, alertIcon } from "./alerts";
+import { useIsDesktop } from "./layout/breakpoints";
 import { haptics } from "./haptics";
 import { motion, radius, spacing, type, weight, withAlpha } from "./tokens";
 
@@ -48,6 +49,7 @@ export function AlertModal({
 }) {
   const color = alertColor(alertType, theme);
   const insets = useSafeAreaInsets();
+  const desktop = useIsDesktop();
   const dark = theme.mode === "dark";
 
   // Tapping the backdrop is the same intent as cancelling. Falls back to the
@@ -62,7 +64,7 @@ export function AlertModal({
       statusBarTranslucent
       onRequestClose={dismiss}
     >
-      <View style={styles.root}>
+      <View style={[styles.root, desktop && styles.rootDesktop]}>
         <Animated.View
           entering={FadeIn.duration(motion.fast)}
           exiting={FadeOut.duration(motion.fast)}
@@ -80,9 +82,12 @@ export function AlertModal({
           exiting={SlideOutDown.duration(motion.base)}
           style={[
             styles.sheet,
+            desktop && styles.sheetDesktop,
             {
               backgroundColor: theme.card,
-              paddingBottom: Math.max(insets.bottom, spacing.lg) + spacing.md,
+              paddingBottom: desktop
+                ? spacing.xl
+                : Math.max(insets.bottom, spacing.lg) + spacing.md,
             },
           ]}
         >
@@ -134,8 +139,20 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "flex-end",
   },
+  // A bottom sheet is a thumb affordance. On a wide screen the same component
+  // rendered 1880px across, welded to the bottom edge — so on desktop it
+  // becomes what it should have been there all along: a centred dialog.
+  rootDesktop: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
   backdrop: {
     flex: 1,
+  },
+  sheetDesktop: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: radius.xxl,
   },
   sheet: {
     borderTopLeftRadius: radius.xxl,

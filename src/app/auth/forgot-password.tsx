@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
 import { AUTH_REDIRECTS } from "../../auth-redirect";
 import { lightTheme } from "../../theme";
+import { useMeasure } from "../../ui/layout/measure";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
 import { Wordmark } from "../../ui/Wordmark";
@@ -26,6 +27,7 @@ type AlertType = "success" | "error" | "warning" | "info";
 
 
 export default function ForgotPassword() {
+  const measure = useMeasure("form");
   // Pinned to the default theme: pre-auth screens run before any
   // preference exists, and useThemeMode flashes light-then-saved on mount.
   const theme = lightTheme;
@@ -99,7 +101,7 @@ export default function ForgotPassword() {
         <ScrollView
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, measure]}
         >
           <Animated.View entering={FadeInDown.duration(motion.base)} style={styles.head}>
             {/* Wordmark and lock share a row rather than stacking. Two

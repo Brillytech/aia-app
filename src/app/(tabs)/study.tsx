@@ -21,6 +21,7 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { useScreenTime } from "../../screen-time";
 import { category, useThemeMode } from "../../theme";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import { AlertModal } from "../../ui/AlertModal";
 import type { IconName } from "../../ui/alerts";
 import { Card } from "../../ui/Card";
@@ -686,6 +687,7 @@ function getQuestionOptions(q: Question) {
   ].filter(([, value]) => Boolean(value));
 }
 export default function Study() {
+  const contentInset = useContentInset();
   const { theme, isDark } = useThemeMode();
   const params = useLocalSearchParams<{
     courseId?: string;
@@ -2541,7 +2543,7 @@ export default function Study() {
           const next = event.nativeEvent.contentOffset.y > 12;
           if (next !== headerCollapsed) setHeaderCollapsed(next);
         }}
-        contentContainerStyle={[styles.scroll, !selectedCourse && styles.courseOnlyScroll]}
+        contentContainerStyle={[styles.scroll, !selectedCourse && styles.courseOnlyScroll, contentInset]}
       >
         {selectedCourse && renderHeader()}
         {!selectedCourse && renderCourseList()}

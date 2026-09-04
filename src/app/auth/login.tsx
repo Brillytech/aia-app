@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
 import { AUTH_REDIRECTS, routeAfterAuth } from "../../auth-redirect";
 import { lightTheme } from "../../theme";
+import { useMeasure } from "../../ui/layout/measure";
 import { AlertModal } from "../../ui/AlertModal";
 import { AuthField } from "../../ui/AuthField";
 import { DevOnboardingReset } from "../../ui/DevOnboardingReset";
@@ -26,6 +27,7 @@ import { layout, motion, radius, spacing, type, weight } from "../../ui/tokens";
 type AlertType = "success" | "error" | "warning" | "info";
 
 export default function Login() {
+  const measure = useMeasure("form");
   // Pinned to the default theme: pre-auth screens run before any
   // preference exists, and useThemeMode flashes light-then-saved on mount.
   const theme = lightTheme;
@@ -148,7 +150,7 @@ export default function Login() {
         <ScrollView
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, measure]}
         >
           {/* No card wrapper. The old layout boxed the form inside a white
               panel floating on a glow, which is a web landing-page shape —

@@ -19,20 +19,20 @@ import {
   View
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
-import { sortCoursesAlphabetically } from "../../courses";
+import { courseCode, sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
 import { category, useThemeMode } from "../../theme";
-import { useContentInset } from "../../ui/layout/breakpoints";
+import { useBreakpoint, useContentInset } from "../../ui/layout/breakpoints";
+import { SplitPane } from "../../ui/layout/SplitPane";
 import { AlertModal } from "../../ui/AlertModal";
 import type { IconName } from "../../ui/alerts";
 import { Card } from "../../ui/Card";
-import { Folder } from "../../ui/Folder";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
 import { subjectColor, subjectIcon } from "../../ui/subject";
-import { layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
+import { elevation, layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
   id: string;
   code: string;
@@ -141,6 +141,20 @@ const fallbackMaterials: Material[] = [
 // living in a separate list that repeated every title.
 // Materials before Questions: reading the material is the step that comes
 // first in the actual study flow, so the tab order now matches it.
+/**
+ * Width at which the library becomes a grid and a picked course splits into
+ * two panes.
+ *
+ * The highest breakpoint in the app, because this screen pays twice: it sits
+ * behind the 240px sidebar AND wants a 320px course rail beside real content.
+ * Below this a two-pane study view would leave the reading column narrower
+ * than the list next to it, which is the wrong way round.
+ */
+const STUDY_SPLIT = 1200;
+
+/** Course rail width once a course is open. */
+const COURSE_RAIL = 320;
+
 const tabs = ["Topics", "Materials", "Questions", "Cards"];
 
 /** Opacity ramp for the header's soft bottom edge, densest at the top. */
@@ -682,6 +696,7 @@ function getQuestionOptions(q: Question) {
   ].filter(([, value]) => Boolean(value));
 }
 export default function Study() {
+  const wide = useBreakpoint(STUDY_SPLIT);
   const contentInset = useContentInset();
   const { theme, isDark } = useThemeMode();
   const params = useLocalSearchParams<{
@@ -1608,6 +1623,32 @@ export default function Study() {
       </View>
     );
   }
+  /**
+   * The course search. Extracted so it can appear in two places: above the
+   * library when browsing, and at the top of the rail once a course is open.
+   * Previously it only existed in the browse header, so on the two-pane layout
+   * the course list was permanently visible but no longer searchable.
+   */
+  function renderSearchBox() {
+    return (
+    <View style={[styles.searchBox, { backgroundColor: theme.card }]}>
+      <MaterialCommunityIcons name="magnify" size={20} color={theme.muted} />
+      <TextInput
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Search courses"
+        placeholderTextColor={theme.muted}
+        style={[styles.searchInput, noFocusRing, { color: theme.text }]}
+      />
+      {search.length > 0 ? (
+        <TouchableOpacity onPress={() => setSearch("")} hitSlop={10}>
+          <MaterialCommunityIcons name="close-circle" size={18} color={theme.muted} />
+        </TouchableOpacity>
+      ) : null}
+    </View>
+    );
+  }
+
   function renderCourseFixedTop() {
     return (
       <Animated.View
@@ -1623,21 +1664,7 @@ export default function Study() {
       >
         {renderHeader()}
 
-        <View style={[styles.searchBox, { backgroundColor: theme.card }]}>
-          <MaterialCommunityIcons name="magnify" size={20} color={theme.muted} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search courses"
-            placeholderTextColor={theme.muted}
-            style={[styles.searchInput, noFocusRing, { color: theme.text }]}
-          />
-          {search.length > 0 ? (
-            <TouchableOpacity onPress={() => setSearch("")} hitSlop={10}>
-              <MaterialCommunityIcons name="close-circle" size={18} color={theme.muted} />
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        {renderSearchBox()}
 
         {/* Soft edge so folders dissolve under the header rather than being
             sliced by it. Fades in only once there is content beneath. */}
@@ -1666,7 +1693,15 @@ export default function Study() {
     );
   }
 
-  function renderCourseList() {
+  /**
+   * The course list, in the two roles it plays.
+   *
+   * "tiles" is the browse view — the full-presence tile, one per row on a
+   * phone and three per row above the split. "rail" is the compact row beside
+   * an open course, where a column of tiles would be a lot of scrolling to
+   * change something you are already reading.
+   */
+  function renderCourseList(mode: "tiles" | "rail" = "tiles") {
     return (
       <>
         {loadingCourses ? (
@@ -1700,46 +1735,104 @@ export default function Study() {
             text="No course matches your profile yet. Please check your department and level, then try again."
           />
         ) : (
-          <View style={styles.list}>
+          <View style={mode === "rail" ? styles.courseList : styles.courseGrid}>
             {filteredCourses.map((course) => {
               const courseTheme = getCourseTheme(course);
+              const code = courseCode(course);
+              const active = selectedCourse?.id === course.id;
+
+              // The rail keeps a compact row: 320px of tiles would be a lot of
+              // scrolling to change a course you are already reading.
+              if (mode === "rail") {
+                return (
+                  <Pressable
+                    key={course.id}
+                    accessibilityRole="button"
+                    accessibilityState={active ? { selected: true } : {}}
+                    accessibilityLabel={[code, course.title].filter(Boolean).join(" ")}
+                    onPress={() => openCourse(course)}
+                    style={({ hovered }: any) => [
+                      styles.courseRow,
+                      hovered && !active ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
+                      active ? { backgroundColor: withAlpha(courseTheme.color, 0.1) } : null,
+                    ]}
+                  >
+                    <MaterialCommunityIcons
+                      name={courseTheme.icon}
+                      size={20}
+                      color={courseTheme.color}
+                    />
+                    <Text style={[styles.courseRowName, { color: theme.text }]} numberOfLines={2}>
+                      {course.title}
+                    </Text>
+                  </Pressable>
+                );
+              }
 
               return (
-                <Folder
+                <View
                   key={course.id}
-                  theme={theme}
-                  tone={courseTheme.color}
-                  label={course.code}
-                  onPress={() => openCourse(course)}
+                  style={[styles.courseCell, wide ? styles.courseCellWide : styles.courseCellFull]}
                 >
-                  <View style={styles.folderTop}>
-                    <IconPlate
-                      theme={theme}
-                      icon={courseTheme.icon}
-                      color={courseTheme.color}
-                      size="md"
-                    />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={[code, course.title].filter(Boolean).join(" ")}
+                    onPress={() => openCourse(course)}
+                    style={({ pressed, hovered }: any) => [
+                      styles.courseTile,
+                      {
+                        backgroundColor: theme.card,
+                        borderColor: theme.border,
+                        ...elevation(hovered && !pressed ? 3 : 2, theme.shadow),
+                        transform: [
+                          { translateY: hovered && !pressed ? -2 : 0 },
+                          { scale: pressed ? 0.985 : 1 },
+                        ],
+                        transitionProperty: "transform, box-shadow",
+                        transitionDuration: motionTokens.fast,
+                      },
+                    ]}
+                  >
+                    <View style={styles.courseTileTop}>
+                      {/* The one place the course hue appears. Background stays
+                          neutral on purpose — a tinted tile made colour
+                          decorative rather than identifying. */}
+                      <MaterialCommunityIcons
+                        name={courseTheme.icon}
+                        size={28}
+                        color={courseTheme.color}
+                      />
 
-                    <View style={styles.flex1}>
-                      {/* No numberOfLines anywhere: long course titles wrap to
-                          as many lines as they need rather than being cut. */}
-                      <Text style={[styles.courseTitle, { color: theme.text }]}>
-                        {course.title}
-                      </Text>
-                      <Text style={[styles.courseMeta, { color: theme.muted }]}>
-                        {course.department && course.level
-                          ? `${course.department} • ${course.level}`
-                          : "Not assigned"}
-                      </Text>
+                      {/* Absent codes drop the badge entirely rather than
+                          rendering an empty pill. courseCode() is the same test
+                          the sort uses. */}
+                      {code ? (
+                        <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
+                          <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
+                            {code}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
 
-                    <MaterialCommunityIcons
-                      name="chevron-right"
-                      size={22}
-                      color={withAlpha(courseTheme.color, 0.75)}
-                    />
-                  </View>
-                </Folder>
+                    {/* No numberOfLines: the full course name always shows,
+                        wrapping as far as it needs. minHeight reserves the
+                        second line so a one-line name does not sit shorter
+                        than its neighbours where there is no row to stretch
+                        against. */}
+                    <Text style={[styles.courseTileName, { color: theme.text }]}>
+                      {course.title}
+                    </Text>
+
+                    <View style={styles.flex1} />
+
+                    <Text style={[styles.courseMeta, { color: theme.muted }]} numberOfLines={1}>
+                      {course.department && course.level
+                        ? `${course.department} • ${course.level}`
+                        : "Not assigned"}
+                    </Text>
+                  </Pressable>
+                </View>
               );
             })}
           </View>
@@ -2547,14 +2640,48 @@ export default function Study() {
         }}
         contentContainerStyle={[styles.scroll, !selectedCourse && styles.courseOnlyScroll, contentInset]}
       >
-        {selectedCourse && renderHeader()}
-        {!selectedCourse && renderCourseList()}
-        {selectedCourse && (
-          <>
+        {/* Three states, not two. Browsing wants the whole width for the
+            grid; an open course wants a narrow list beside real content.
+            Collapsing those into one layout is what made the library a
+            single column on a 1500px screen. */}
+        {wide && !selectedCourse ? renderCourseList("tiles") : null}
+
+        {wide && selectedCourse ? (
+          <SplitPane
+            theme={theme}
+            railWidth={COURSE_RAIL}
+            divider={false}
+            rail={
+              <View>
+                {/* Search lives with the list it filters, so it stays usable
+                    while a course is open — the whole point of keeping the
+                    list on screen. */}
+                <View style={styles.railSearch}>{renderSearchBox()}</View>
+
+                {/* The list stays put. Picking a course used to replace it,
+                    so switching courses meant navigating back first. */}
+                {renderCourseList("rail")}
+              </View>
+            }
+          >
+            {renderHeader()}
             {renderTabs()}
             {renderActiveContent()}
+          </SplitPane>
+        ) : null}
+
+        {!wide ? (
+          <>
+            {selectedCourse && renderHeader()}
+            {!selectedCourse && renderCourseList("tiles")}
+            {selectedCourse && (
+              <>
+                {renderTabs()}
+                {renderActiveContent()}
+              </>
+            )}
           </>
-        )}
+        ) : null}
       </ScrollView>
       {renderMaterialViewer()}
       <AlertModal
@@ -2646,6 +2773,89 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: 14,
+  },
+  // --- course tiles --------------------------------------------------------
+  //
+  // ELEVATION EXCEPTION, DELIBERATE. The tokens pass removed shadows almost
+  // everywhere: depth on the web comes from a border and a background step,
+  // and floating containers were what made every screen read like a phone.
+  // Course tiles are the exception, and only they are: they are the primary
+  // tappable object in the app, and a tap target should feel liftable. This is
+  // not a signal to restore shadows on Settings, Premium, Profile or anywhere
+  // a container merely groups content. Do not "fix" this by flattening it.
+  railSearch: {
+    marginBottom: 14,
+  },
+  courseList: {
+    gap: 2,
+  },
+  courseRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    marginHorizontal: -spacing.md,
+    borderRadius: radius.sm,
+  },
+  courseGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 14,
+    // Rows pack from the top; they never distribute leftover height between
+    // themselves, which is what produced uneven gaps before.
+    alignContent: "flex-start",
+  },
+  courseCell: {
+    flexGrow: 1,
+    minWidth: 0,
+    // The cell is a flex container so the tile inside can fill it. That is
+    // what makes align-items: stretch CORRECT here — every tile in a row
+    // matches height with no dead space, unlike the folder body that used to
+    // keep its natural height inside a stretched cell.
+    flexDirection: "row",
+  },
+  // 31% caps the row at three: four would need 124% before gaps.
+  courseCellWide: {
+    flexBasis: "31%",
+  },
+  courseCellFull: {
+    flexBasis: "100%",
+  },
+  courseTile: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.lg,
+  },
+  courseTileTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+  courseBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
+    borderRadius: radius.pill,
+  },
+  courseBadgeText: {
+    ...typeScale.micro,
+    letterSpacing: 0.5,
+  },
+  courseTileName: {
+    ...typeScale.section,
+    // Two lines of section (24pt each), reserved so a one-line course does not
+    // sit shorter than its neighbours on narrow, where there is no row.
+    minHeight: 48,
+  },
+  // Compact row, rail only.
+  courseRowName: {
+    flex: 1,
+    minWidth: 0,
+    ...typeScale.body,
+    fontWeight: weight.semi,
   },
   folderTop: {
     flexDirection: "row",

@@ -17,13 +17,28 @@ type SortableCourse = {
 };
 
 /**
- * Sort key. Code first, because it is the badge the card leads with and it
- * groups a department's courses together (CSC 201, CSC 202, MTH 101) while
- * still reading A-Z. Title carries the sort on its own when a course has no
- * code, and breaks ties when two share one.
+ * The course code, or null when there isn't one.
+ *
+ * Lives here, beside `sortKey`, precisely so the two cannot drift: the list
+ * sorts on code-then-title, so anything that DISPLAYS a code column has to
+ * agree with this about what counts as having a code. A course whose code is
+ * absent, empty or whitespace sorts by its title alone, and must therefore
+ * render without a code rather than with a blank one.
+ */
+export function courseCode(course: SortableCourse): string | null {
+  const code = String(course.code ?? "").trim();
+  return code.length > 0 ? code : null;
+}
+
+/**
+ * Sort key. Code first, because it groups a department's courses together
+ * (CSC 201, CSC 202, MTH 101) while still reading A-Z. Title carries the sort
+ * on its own when a course has no code, and breaks ties when two share one.
  */
 function sortKey(course: SortableCourse) {
-  return `${course.code ?? ""} ${course.title ?? ""}`.trim();
+  // Uses courseCode so a whitespace-only code sorts as absent, matching what
+  // the code column will show.
+  return `${courseCode(course) ?? ""} ${course.title ?? ""}`.trim();
 }
 
 /**

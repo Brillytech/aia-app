@@ -1570,56 +1570,56 @@ export default function Study() {
             <MaterialCommunityIcons name="chevron-left" size={26} color={theme.text} />
           </TouchableOpacity>
 
-          <View
-            style={[
-              styles.statPill,
-              { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
-            ]}
-          >
-            <Text style={[styles.statPillText, { color: tone }]}>
+          {/* Neutral. The count is not a status worth spending the course hue
+              on, and tinting it made a third surface carry the same colour. */}
+          <View style={[styles.statPill, { backgroundColor: theme.soft }]}>
+            <Text style={[styles.statPillText, { color: theme.muted }]}>
               {topics.length} topics
             </Text>
           </View>
         </View>
 
-        {/* Toned by the course, not a hardcoded dark panel — the old one was
-            navy in light mode too. */}
-        <Card
-          theme={theme}
-          tone={tone}
-          backgroundColor={theme.card}
-          borderColor={theme.border}
-          shadowColor={theme.shadow}
-          radiusSize="xl"
-          style={styles.studyHero}
-        >
-          <View style={styles.heroTop}>
-            <IconPlate theme={theme} icon={selectedCourseTheme.icon} color={tone} size="lg" />
+        {/* Editorial masthead, matching Profile. The panel used to be washed
+            in the course hue, with a tinted icon plate inside it — the colour
+            was on the surface rather than identifying anything. It sits on
+            the glyph now and nowhere else. */}
+        <View style={styles.mast}>
+          <MaterialCommunityIcons
+            name={selectedCourseTheme.icon}
+            size={34}
+            color={tone}
+          />
 
-            <View style={styles.flex1}>
-              <Text style={[styles.heroCode, { color: tone }]}>
-                {selectedCourse.code}
-              </Text>
-              <Text style={[styles.heroTitle, { color: theme.text }]}>
+          <View style={styles.flex1}>
+            <View style={styles.mastTop}>
+              <Text style={[styles.mastTitle, { color: theme.text }]}>
                 {selectedCourse.title}
               </Text>
+
+              {courseCode(selectedCourse) ? (
+                <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
+                  <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
+                    {courseCode(selectedCourse)}
+                  </Text>
+                </View>
+              ) : null}
             </View>
+
+            <Text style={[styles.mastMeta, { color: theme.muted }]}>
+              {selectedTopic
+                ? selectedTopic.title
+                : `${selectedCourse.department || "Course"} • ${selectedCourse.level || "Level"}`}
+            </Text>
           </View>
+        </View>
 
-          <Text style={[styles.heroMeta, { color: theme.muted }]}>
-            {selectedTopic
-              ? selectedTopic.title
-              : `${selectedCourse.department || "Course"} • ${selectedCourse.level || "Level"}`}
-          </Text>
-
-          {selectedTopic && (
-            <View style={styles.contentStatsRow}>
-              <SmallStat label="Questions" value={questions.length} color={category.yellow} />
-              <SmallStat label="Materials" value={materials.length} color={category.blue} />
-              <SmallStat label="Cards" value={questions.length} color={category.green} />
-            </View>
-          )}
-        </Card>
+        {selectedTopic && (
+          <View style={styles.contentStatsRow}>
+            <SmallStat label="Questions" value={questions.length} color={category.yellow} />
+            <SmallStat label="Materials" value={materials.length} color={category.blue} />
+            <SmallStat label="Cards" value={questions.length} color={category.green} />
+          </View>
+        )}
       </View>
     );
   }
@@ -1862,44 +1862,63 @@ export default function Study() {
       );
     }
     return (
-      <View style={styles.list}>
+      <View style={[styles.toc, { borderTopColor: theme.border }]}>
         {topics.map((topic, index) => {
           const completed = completedTopicIds.has(String(topic.id));
           const saving = savingTopicId === topic.id;
 
-          // Completed topics tone green; the rest tone with the course hue.
-          const tone = completed ? theme.success : selectedCourseTheme.color;
-
           return (
-            // One row per topic rather than a stacked card. The old version
-            // spent a 32pt row on a "Done"/"Open" pill and another on a
-            // full-width "Mark complete" button, both saying what the single
-            // checkbox on the right now says — roughly 130pt per topic for one
-            // line of information, so a course of ten topics was mostly
-            // chrome.
-            <Card
+            // A table of contents, not a stack of cards. Every row used to be
+            // a filled surface — green when complete, course-hue when not — so
+            // with most topics done the list was a wall of identical blocks and
+            // the colour marked everything rather than distinguishing anything.
+            // Plain rows, hairline dividers, and the only colour left is the
+            // check on rows that are actually finished.
+            <Pressable
               key={topic.id}
               onPress={() => openTopic(topic)}
-              theme={theme}
-              tone={tone}
-              backgroundColor={theme.card}
-              borderColor={theme.border}
-              shadowColor={theme.shadow}
-              radiusSize="md"
-              style={styles.topicRow}
+              style={({ hovered }: any) => [
+                styles.tocRow,
+                { borderBottomColor: theme.border },
+                hovered ? { backgroundColor: withAlpha(theme.text, 0.03) } : null,
+              ]}
             >
-              <View
-                style={[
-                  styles.topicNumber,
-                  { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
-                ]}
-              >
-                <Text style={[styles.topicNumberText, { color: tone }]}>
+              {/* The number is a node on a path, not just an index. The line
+                  runs the full height of the row and is trimmed at the two
+                  ends of the list, so consecutive rows join into one
+                  continuous thread rather than a stack of tick marks.
+
+                  Colour follows this row's own state, which means a green run
+                  through the stretch you have finished and a neutral thread
+                  ahead of it. Deliberately faint: it is orientation, not
+                  another status signal competing with the check. */}
+              <View style={styles.tocRail}>
+                <View
+                  style={[
+                    styles.tocLine,
+                    {
+                      backgroundColor: completed
+                        ? withAlpha(theme.success, 0.45)
+                        : theme.border,
+                      top: index === 0 ? "50%" : 0,
+                      bottom: index === topics.length - 1 ? "50%" : 0,
+                    },
+                  ]}
+                />
+
+                {/* Sits on the page ground so the thread passes behind rather
+                    than through the digit. */}
+                <Text
+                  style={[
+                    styles.tocNumber,
+                    { color: theme.muted, backgroundColor: theme.bg },
+                  ]}
+                >
                   {index + 1}
                 </Text>
               </View>
 
-              <View style={styles.topicRowText}>
+              <View style={styles.tocText}>
                 <Text
                   numberOfLines={1}
                   style={[styles.topicTitle, { color: theme.text }]}
@@ -1917,41 +1936,49 @@ export default function Study() {
                 ) : null}
               </View>
 
-              <TouchableOpacity
-                onPress={(event) => {
-                  event.stopPropagation();
-                  toggleTopicCompletion(topic);
-                }}
-                disabled={saving}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityState={{ checked: completed }}
-                accessibilityLabel={
-                  completed
-                    ? `Mark ${topic.title} not complete`
-                    : `Mark ${topic.title} complete`
-                }
-                style={[
-                  styles.topicComplete,
-                  { backgroundColor: withAlpha(tone, isDark ? 0.22 : 0.14) },
-                ]}
-              >
-                {saving ? (
-                  <ActivityIndicator size="small" color={tone} />
-                ) : (
-                  <>
-                    <MaterialCommunityIcons
-                      name={completed ? "check-circle" : "check-circle-outline"}
-                      size={15}
-                      color={tone}
-                    />
-                    <Text style={[styles.topicCompleteText, { color: tone }]}>
-                      {completed ? "Completed" : "Mark complete"}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </Card>
+              {saving ? (
+                <ActivityIndicator size="small" color={theme.muted} />
+              ) : completed ? (
+                // Icon only. A completed row reports a status rather than
+                // offering an ambiguous action, so it does not need the text
+                // label an actual control does.
+                <TouchableOpacity
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    toggleTopicCompletion(topic);
+                  }}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityState={{ checked: true }}
+                  accessibilityLabel={`Mark ${topic.title} not complete`}
+                >
+                  {/* A ring, not a bare glyph. The incomplete row says it is a
+                      control by being a pill; without an outline the check
+                      read as a printed status and gave no hint it undoes. */}
+                  <View style={[styles.tocCheck, { borderColor: theme.success }]}>
+                    <MaterialCommunityIcons name="check" size={15} color={theme.success} />
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                // Neutral, deliberately: the row is plain now, and tinting this
+                // would start washing it again.
+                <TouchableOpacity
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    toggleTopicCompletion(topic);
+                  }}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityState={{ checked: false }}
+                  accessibilityLabel={`Mark ${topic.title} complete`}
+                  style={[styles.tocAction, { borderColor: theme.border }]}
+                >
+                  <Text style={[styles.tocActionText, { color: theme.text }]}>
+                    Mark complete
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </Pressable>
           );
         })}
       </View>
@@ -2884,26 +2911,26 @@ const styles = StyleSheet.create({
     ...typeScale.caption,
     letterSpacing: 0,
   },
-  studyHero: {
-    padding: spacing.xl,
-  },
-  heroTop: {
+  // Editorial masthead. No panel, no tint, no card: the content sits on the
+  // page ground and the glyph is the only thing carrying the course hue.
+  mast: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: spacing.lg,
   },
-  heroCode: {
-    ...typeScale.micro,
-    letterSpacing: 0.8,
+  mastTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    flexWrap: "wrap",
   },
-  heroTitle: {
-    ...typeScale.title,
-    marginTop: spacing.xxs,
+  mastTitle: {
+    ...typeScale.display,
   },
-  heroMeta: {
+  mastMeta: {
     ...typeScale.body,
     fontWeight: weight.regular,
-    marginTop: spacing.lg,
+    marginTop: spacing.xs,
   },
   contentStatsRow: {
     flexDirection: "row",
@@ -2955,48 +2982,65 @@ const styles = StyleSheet.create({
     ...typeScale.body,
     fontWeight: weight.semi,
   },
-  // One compact row per topic. The number badge is the admin's ordering,
-  // the checkbox is the completion state, and nothing else earns a line.
-  topicRow: {
+  // Table of contents: rules, not surfaces.
+  toc: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  tocRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
+    gap: spacing.lg,
     paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  topicRowText: {
-    flex: 1,
-    gap: spacing.xxs,
-  },
-  // The completion control keeps its text label — a bare checkbox leaves the
-  // reader to infer what ticking it means. It sits inline on the row rather
-  // than on its own line below, which is where the height went before.
-  //
-  // flexShrink: 0 so a long topic title truncates instead of squeezing the
-  // label to the point where it wraps.
-  topicComplete: {
-    flexDirection: "row",
+  // The rail must stretch so the thread can span the row's full height —
+  // without alignSelf the column would only be as tall as the digit and the
+  // segments would not meet between rows.
+  tocRail: {
+    width: 24,
+    alignSelf: "stretch",
     alignItems: "center",
-    gap: spacing.xs,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    minHeight: 32,
-    flexShrink: 0,
+    justifyContent: "center",
+    // Bleeds through the row's vertical padding. alignSelf: "stretch" only
+    // spans the content box, so without this the thread stopped 12px short at
+    // each end and the run of rows read as tick marks rather than one path.
+    marginVertical: -spacing.md,
   },
-  topicCompleteText: {
+  tocLine: {
+    position: "absolute",
+    width: StyleSheet.hairlineWidth,
+  },
+  tocNumber: {
     ...typeScale.caption,
     letterSpacing: 0,
+    textAlign: "center",
+    // Breaks the thread behind the digit rather than drawing a disc over it.
+    paddingVertical: spacing.xxs,
   },
-  topicNumber: {
+  tocCheck: {
     width: 28,
     height: 28,
-    borderRadius: radius.sm,
+    borderRadius: 14,
+    borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
   },
-  topicNumberText: {
-    ...typeScale.bodyStrong,
+  tocText: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.xxs,
+  },
+  tocAction: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 30,
+    justifyContent: "center",
+  },
+  tocActionText: {
+    ...typeScale.caption,
+    letterSpacing: 0,
   },
   topicTitle: {
     ...typeScale.body,

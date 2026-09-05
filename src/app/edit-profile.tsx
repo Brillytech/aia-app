@@ -6,7 +6,6 @@ import {
   Linking,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
@@ -20,10 +19,19 @@ import {
 } from "../username";
 import { AlertModal } from "../ui/AlertModal";
 import { PrimaryButton } from "../ui/Button";
-import { dividerInset, ListRow, ListSection } from "../ui/List";
+import { Field } from "../ui/Field";
+import { Row, Rows } from "../ui/Rows";
 import { PageHeader } from "../ui/PageHeader";
+import { useBreakpoint } from "../ui/layout/breakpoints";
+import { SplitPane } from "../ui/layout/SplitPane";
 import { Screen } from "../ui/Screen";
-import { layout, noFocusRing, spacing, type, weight } from "../ui/tokens";
+import { layout, spacing, type, weight } from "../ui/tokens";
+
+/**
+ * Width at which the read-only academic details move beside the form rather
+ * than below it.
+ */
+const EDIT_PROFILE_SPLIT = 900;
 
 type Profile = {
   id: string;
@@ -46,6 +54,7 @@ function clean(value: string | null | undefined) {
 }
 
 export default function EditProfilePage() {
+  const wide = useBreakpoint(EDIT_PROFILE_SPLIT);
   const { theme } = useThemeMode();
 
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -66,12 +75,19 @@ export default function EditProfilePage() {
 
   // This section is a plain list, not an AuthField, so there is no per-field
   // error slot — the footer carries the read-out instead.
-  const usernameFooter =
+  // Field separates these; the old single footer string rendered a "taken"
+  // warning in the same muted grey as "available".
+  const usernameHint =
     usernameStatus === "checking"
       ? "Checking username…"
       : usernameStatus === "available"
         ? "Username is available."
-        : usernameMessage || undefined;
+        : undefined;
+
+  const usernameError =
+    usernameStatus === "taken" || usernameStatus === "invalid"
+      ? usernameMessage || undefined
+      : undefined;
 
   const [alert, setAlert] = useState({
     visible: false,
@@ -319,60 +335,152 @@ export default function EditProfilePage() {
         onBack={() => router.back()}
         contentContainerStyle={styles.scroll}
       >
-        <ListSection
-          theme={theme}
-          title="Personal"
-          inset={dividerInset.none}
-          footer={usernameFooter}
-        >
-          <ListRow
+        {wide ? (
+          <SplitPane
             theme={theme}
-            label="Username"
-            accessory={
-              <TextInput
+            // Academic details are reference: locked, and not why anyone opened
+            // this screen. Beside the form, not in front of it.
+            side="end"
+            railWidth={300}
+            divider={false}
+            rail={
+              <View>
+                <Rows
+                  theme={theme}
+                  title="Academic"
+                  footer="Managed by admin support to keep your course access correct."
+                >
+                  <Row
+                    theme={theme}
+                    label="School"
+                    value={school || "Not set"}
+                    chevron={false}
+                    accessory={lock}
+                  />
+
+                  <Row
+                    theme={theme}
+                    label="Faculty"
+                    value={faculty || "Not set"}
+                    chevron={false}
+                    accessory={lock}
+                  />
+
+                  <Row
+                    theme={theme}
+                    label="Department"
+                    value={department || "Not set"}
+                    chevron={false}
+                    accessory={lock}
+                  />
+
+                  <Row
+                    theme={theme}
+                    label="Level"
+                    value={level || "Not set"}
+                    chevron={false}
+                    accessory={lock}
+                  />
+
+                  <Row
+                    theme={theme}
+                    label="Request correction"
+                    value="WhatsApp"
+                    onPress={openAcademicSupport}
+                  />
+                </Rows>
+              </View>
+            }
+          >
+            <View>
+              <Text style={[styles.groupTitle, { color: theme.muted }]}>Personal</Text>
+
+              <Field
+                theme={theme}
+                label="Username"
                 value={username}
                 onChangeText={setUsername}
                 placeholder="Enter username"
-                placeholderTextColor={theme.muted}
                 autoCapitalize="none"
-                style={[styles.input, noFocusRing, { color: theme.text }]}
+                hint={usernameHint}
+                error={usernameError}
               />
-            }
-          />
 
-          <ListRow
-            theme={theme}
-            label="Full name"
-            accessory={
-              <TextInput
+              <Field
+                theme={theme}
+                label="Full name"
                 value={fullName}
                 onChangeText={setFullName}
                 placeholder="Enter full name"
-                placeholderTextColor={theme.muted}
-                style={[styles.input, noFocusRing, { color: theme.text }]}
+                autoCapitalize="words"
               />
-            }
-          />
 
-          <ListRow
+              {/* Not a Field: it cannot be edited here, so an input affordance
+                  would be a lie. A row with the lock says what is true. */}
+              <Rows theme={theme}>
+                <Row
+                  theme={theme}
+                  label="Email"
+                  value={profile?.email || "No email"}
+                  chevron={false}
+                  accessory={lock}
+                />
+              </Rows>
+            </View>
+
+            <PrimaryButton
+              label={saving ? "Saving" : "Save changes"}
+              onPress={confirmSave}
+              disabled={saving}
+              color={theme.accent}
+              textColor={theme.onAccent}
+              icon={saving ? <ActivityIndicator size="small" color={theme.onAccent} /> : undefined}
+            />
+          </SplitPane>
+        ) : (
+          <>
+        <View>
+          <Text style={[styles.groupTitle, { color: theme.muted }]}>Personal</Text>
+
+          <Field
             theme={theme}
-            label="Email"
-            value={profile?.email || "No email"}
-            chevron={false}
-            accessory={lock}
+            label="Username"
+            value={username}
+            onChangeText={setUsername}
+            placeholder="Enter username"
+            autoCapitalize="none"
+            hint={usernameHint}
+            error={usernameError}
           />
-        </ListSection>
 
-        {/* The lock glyphs carry "you can't edit this"; the footer carries the
-            one thing they can't — who to ask. Replaces two paragraphs that
-            said the same thing 60 lines apart. */}
-        <ListSection
+          <Field
+            theme={theme}
+            label="Full name"
+            value={fullName}
+            onChangeText={setFullName}
+            placeholder="Enter full name"
+            autoCapitalize="words"
+          />
+
+          {/* Not a Field: it cannot be edited here, so an input affordance
+              would be a lie. A row with the lock says what is true. */}
+          <Rows theme={theme}>
+            <Row
+              theme={theme}
+              label="Email"
+              value={profile?.email || "No email"}
+              chevron={false}
+              accessory={lock}
+            />
+          </Rows>
+        </View>
+
+        <Rows
           theme={theme}
           title="Academic"
-          inset={dividerInset.none}
           footer="Managed by admin support to keep your course access correct."
         >
-          <ListRow
+          <Row
             theme={theme}
             label="School"
             value={school || "Not set"}
@@ -380,7 +488,7 @@ export default function EditProfilePage() {
             accessory={lock}
           />
 
-          <ListRow
+          <Row
             theme={theme}
             label="Faculty"
             value={faculty || "Not set"}
@@ -388,7 +496,7 @@ export default function EditProfilePage() {
             accessory={lock}
           />
 
-          <ListRow
+          <Row
             theme={theme}
             label="Department"
             value={department || "Not set"}
@@ -396,7 +504,7 @@ export default function EditProfilePage() {
             accessory={lock}
           />
 
-          <ListRow
+          <Row
             theme={theme}
             label="Level"
             value={level || "Not set"}
@@ -404,13 +512,13 @@ export default function EditProfilePage() {
             accessory={lock}
           />
 
-          <ListRow
+          <Row
             theme={theme}
             label="Request correction"
             value="WhatsApp"
             onPress={openAcademicSupport}
           />
-        </ListSection>
+        </Rows>
 
         <PrimaryButton
           label={saving ? "Saving" : "Save changes"}
@@ -420,6 +528,8 @@ export default function EditProfilePage() {
           textColor={theme.onAccent}
           icon={saving ? <ActivityIndicator size="small" color={theme.onAccent} /> : undefined}
         />
+          </>
+        )}
       </PageHeader>
 
       <AlertModal
@@ -451,13 +561,10 @@ const styles = StyleSheet.create({
   loadingTitle: {
     ...type.body,
   },
-  input: {
-    flex: 1,
-    ...type.bodyLg,
-    fontWeight: weight.regular,
-    textAlign: "right",
-    // Android gives TextInput intrinsic vertical padding that would push the
-    // row past its 52px floor.
-    paddingVertical: 0,
+  groupTitle: {
+    ...type.caption,
+    fontWeight: weight.medium,
+    letterSpacing: 0,
+    marginBottom: spacing.sm,
   },
 });

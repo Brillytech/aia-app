@@ -12,11 +12,32 @@ import {
 import { supabase } from "../../lib/supabase";
 import { AlertType, category, medal, Theme, useThemeMode } from "../theme";
 import { AlertModal } from "../ui/AlertModal";
-import { ListRow, ListSection } from "../ui/List";
+import { Row, Rows } from "../ui/Rows";
 import { PageHeader } from "../ui/PageHeader";
+import { useBreakpoint } from "../ui/layout/breakpoints";
 import { Screen } from "../ui/Screen";
 import { Segmented } from "../ui/Segmented";
 import { layout, radius, spacing, type, weight, withAlpha } from "../ui/tokens";
+
+/**
+ * Width at which the rankings become a real table.
+ *
+ * Low compared with the other screens because a table needs less than a pair
+ * of panes: five short columns fit well before a two-column layout would.
+ */
+const LEADERBOARD_SPLIT = 760;
+
+/**
+ * Column widths, shared by the header and every row so they cannot drift.
+ * Student is the flexible one; the rest are fixed, which is what keeps long
+ * names from pushing the score column out of alignment.
+ */
+const COL = {
+  rank: 56,
+  department: 190,
+  level: 84,
+  xp: 96,
+};
 
 type LeaderboardUser = {
   user_id: string;
@@ -40,7 +61,6 @@ const RANGES: readonly { value: RangeKey; label: string }[] = [
 const AVATAR = 32;
 const RANK_NUM = 22;
 /** paddingHorizontal + rank number + inner gap + avatar + row gap. */
-const RANK_INSET = spacing.lg + RANK_NUM + spacing.sm + AVATAR + spacing.md;
 
 function getWeekStartIso(date = new Date()) {
   const current = new Date(date);
@@ -96,6 +116,7 @@ function getRankColor(rank: number) {
 }
 
 export default function LeaderboardPage() {
+  const wide = useBreakpoint(LEADERBOARD_SPLIT);
   const { theme } = useThemeMode();
 
   const [range, setRange] = useState<RangeKey>("weekly");
@@ -264,6 +285,63 @@ export default function LeaderboardPage() {
     );
   }
 
+  function renderTableHead() {
+    return (
+      <View style={styles.tableHead}>
+        <Text style={[styles.headCell, { width: COL.rank, color: theme.muted }]}>Rank</Text>
+        <Text style={[styles.headCell, styles.flex1, { color: theme.muted }]}>Student</Text>
+        <Text style={[styles.headCell, { width: COL.department, color: theme.muted }]}>Department</Text>
+        <Text style={[styles.headCell, { width: COL.level, color: theme.muted }]}>Level</Text>
+        <Text style={[styles.headCell, styles.right, { width: COL.xp, color: theme.muted }]}>XP</Text>
+      </View>
+    );
+  }
+
+  /**
+   * One table row. Department and level get their own columns here rather
+   * than being concatenated into a subtitle — aligned columns are the whole
+   * reason a table beats a list at this width.
+   */
+  function renderTableRow(item: LeaderboardUser, highlight: boolean, nameOverride?: string) {
+    const color = getRankColor(item.rank);
+
+    return (
+      <View
+        key={item.user_id}
+        style={[
+          styles.tableRow,
+          highlight ? { backgroundColor: withAlpha(color, 0.1) } : null,
+        ]}
+      >
+        <Text style={[styles.rankCell, { width: COL.rank, color: highlight ? color : theme.muted }]}>
+          {item.rank}
+        </Text>
+
+        <View style={[styles.studentCell, styles.flex1]}>
+          <Avatar user={item} size={AVATAR} />
+          <Text style={[styles.nameCell, { color: theme.text }]} numberOfLines={1}>
+            {nameOverride ?? item.displayName}
+          </Text>
+        </View>
+
+        <Text
+          style={[styles.cell, { width: COL.department, color: theme.muted }]}
+          numberOfLines={1}
+        >
+          {item.department || "—"}
+        </Text>
+
+        <Text style={[styles.cell, { width: COL.level, color: theme.muted }]} numberOfLines={1}>
+          {item.level || "—"}
+        </Text>
+
+        <Text style={[styles.xpCell, styles.right, { width: COL.xp, color: theme.text }]} numberOfLines={1}>
+          {formatXp(item.xp)}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <Screen backgroundColor={theme.bg}>
       <PageHeader
@@ -299,9 +377,10 @@ export default function LeaderboardPage() {
         ) : null}
 
         {rest.length > 0 || leaders.length === 0 ? (
-          <ListSection theme={theme} title="Rankings" inset={RANK_INSET}>
+          <Rows theme={theme} title="Rankings">
+            {wide ? renderTableHead() : null}
             {leaders.length === 0 ? (
-              <ListRow
+              <Row
                 theme={theme}
                 icon="trophy-broken"
                 label="No ranking yet"
@@ -314,8 +393,10 @@ export default function LeaderboardPage() {
               rest.slice(0, visibleCount).map((item) => {
                 const color = getRankColor(item.rank);
 
+                if (wide) return renderTableRow(item, Boolean(item.isMe));
+
                 return (
-                  <ListRow
+                  <Row
                     key={item.user_id}
                     theme={theme}
                     leading={
@@ -337,7 +418,7 @@ export default function LeaderboardPage() {
             )}
 
             {rest.length > visibleCount ? (
-              <ListRow
+              <Row
                 theme={theme}
                 label="Show more"
                 value={`${rest.length - visibleCount} more`}
@@ -353,7 +434,7 @@ export default function LeaderboardPage() {
                 still one tap away without permanently costing a band of the
                 screen. */}
             {myRank && !myRankVisible ? (
-              <ListRow
+              wide ? renderTableRow(myRank, true, "You") : <Row
                 theme={theme}
                 leading={
                   <View style={styles.rankLead}>
@@ -370,7 +451,7 @@ export default function LeaderboardPage() {
                 style={{ backgroundColor: withAlpha(theme.accent, 0.1) }}
               />
             ) : null}
-          </ListSection>
+          </Rows>
         ) : null}
       </PageHeader>
 
@@ -545,6 +626,59 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: spacing.sm,
   },
+  // --- table (wide only) ---------------------------------------------------
+  tableHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  headCell: {
+    ...type.micro,
+    letterSpacing: 0.4,
+  },
+  tableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    // Bleeds slightly wider than the row text so a highlighted row reads as a
+    // band across the table rather than a floating chip.
+    paddingHorizontal: spacing.sm,
+    marginHorizontal: -spacing.sm,
+    borderRadius: radius.xs,
+  },
+  cell: {
+    ...type.body,
+    fontWeight: weight.regular,
+  },
+  rankCell: {
+    ...type.body,
+    fontWeight: weight.semi,
+  },
+  studentCell: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    minWidth: 0,
+  },
+  nameCell: {
+    ...type.body,
+    fontWeight: weight.medium,
+    flexShrink: 1,
+  },
+  xpCell: {
+    ...type.body,
+    fontWeight: weight.semi,
+  },
+  right: {
+    textAlign: "right",
+  },
+  flex1: {
+    flex: 1,
+    minWidth: 0,
+  },
+
   rankLead: {
     flexDirection: "row",
     alignItems: "center",

@@ -17,14 +17,16 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { usePremium } from "../../premium";
 import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
-import { useContentInset } from "../../ui/layout/breakpoints";
 import { AlertModal } from "../../ui/AlertModal";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
 import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
-import { dividerInset, ListRow, ListSection } from "../../ui/List";
+import { Row, Rows } from "../../ui/Rows";
+import { Stat } from "../../ui/Stat";
 import { PageHeader } from "../../ui/PageHeader";
+import { useBreakpoint, useContentInset } from "../../ui/layout/breakpoints";
+import { SplitPane } from "../../ui/layout/SplitPane";
 import { Screen } from "../../ui/Screen";
 import {
   layout,
@@ -65,6 +67,8 @@ type ActivityLog = {
   accuracy_percent: number | null;
 };
 
+const PROFILE_SPLIT = 1240;
+
 const FALLBACK_PROFILE: Profile = {
   id: "demo",
   username: "Student",
@@ -79,6 +83,10 @@ const FALLBACK_PROFILE: Profile = {
 
 export default function ProfilePage() {
   const contentInset = useContentInset();
+  // Higher than the other screens because this one sits behind the 240px
+  // sidebar: usable content is the window minus that rail, so the window has
+  // to be wider before two panes fit.
+  const wide = useBreakpoint(PROFILE_SPLIT);
   const { theme } = useThemeMode();
   const { isPremium } = usePremium();
 
@@ -477,7 +485,7 @@ export default function ProfilePage() {
         }
       >
         <AnimatedSection index={0}>
-          <View style={styles.identitySection}>
+          <View style={[styles.identitySection, wide && styles.identityWide]}>
             {/* One rounded box for the avatar, not three. The ring and the
                 inner Card were separate radii wrapping the same 96px circle. */}
             <Card
@@ -515,7 +523,7 @@ export default function ProfilePage() {
               </View>
             </Card>
 
-            <Text style={[styles.name, { color: theme.text }]}>{displayName}</Text>
+            <Text style={[styles.name, wide && styles.textStart, { color: theme.text }]}>{displayName}</Text>
 
             <Text style={[styles.email, { color: theme.muted }]}>
               {profile?.email || "No email available"}
@@ -530,91 +538,218 @@ export default function ProfilePage() {
           </View>
         </AnimatedSection>
 
+        {wide ? (
+          <SplitPane
+            theme={theme}
+            // Account details follow the metrics: the page is about progress,
+            // and school/faculty/level is reference data you check, not read.
+            side="end"
+            railWidth={300}
+            divider={false}
+            rail={
+              <View>
+                <AnimatedSection index={3}>
+                  <Rows theme={theme} title="Academic identity">
+                    <Row
+                      theme={theme}
+                      label="School"
+                      value={profile?.school || "Not set"}
+                      chevron={false}
+                    />
+
+                    <Row
+                      theme={theme}
+                      label="Faculty"
+                      value={profile?.faculty || "Not set"}
+                      chevron={false}
+                    />
+
+                    <Row
+                      theme={theme}
+                      label="Department"
+                      value={profile?.department || "Not set"}
+                      chevron={false}
+                    />
+
+                    <Row
+                      theme={theme}
+                      label="Level"
+                      value={profile?.level || "Not set"}
+                      chevron={false}
+                    />
+                  </Rows>
+                </AnimatedSection>
+                <AnimatedSection index={4}>
+                  <Rows theme={theme} title="Account">
+                    <Row
+                      theme={theme}
+                      icon="account-edit-outline"
+                      label="Edit Profile"
+                      onPress={() => router.push("/edit-profile")}
+                    />
+
+                    <Row
+                      theme={theme}
+                      icon="cog-outline"
+                      label="Settings"
+                      onPress={() => router.push("/settings")}
+                    />
+
+                    <Row
+                      theme={theme}
+                      icon="lifebuoy"
+                      label="Help & Support"
+                      onPress={() => setSupportOpen(true)}
+                    />
+
+                    <Row
+                      theme={theme}
+                      icon="crown"
+                      iconColor={category.yellow}
+                      label="LASU Scholar Premium"
+                      value={isPremium ? "Premium member" : "Free"}
+                      onPress={() => router.push("/premium" as any)}
+                    />
+
+                    <Row
+                      theme={theme}
+                      icon="star-outline"
+                      label="Write a Review"
+                      onPress={openReviewPage}
+                    />
+                  </Rows>
+
+                </AnimatedSection>
+
+                {/* Separated from Account, the same way Settings does it — a
+                    destructive action should not read as the next row down. */}
+                <View style={[styles.railFooter, { borderTopColor: theme.border }]}>
+                  <Rows theme={theme}>
+                    <Row
+                      theme={theme}
+                      label="Sign Out"
+                      destructive
+                      loading={loggingOut}
+                      onPress={handleLogout}
+                    />
+                  </Rows>
+                </View>
+              </View>
+            }
+          >
+            <AnimatedSection index={1}>
+              <View style={styles.statsRow}>
+                <View style={[styles.statCell, wide && styles.statCellWide]}>
+                  <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
+                </View>
+                <View style={[styles.statCell, wide && styles.statCellWide]}>
+                  <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
+                </View>
+                <View style={[styles.statCell, wide && styles.statCellWide]}>
+                  <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
+                </View>
+                <View style={[styles.statCell, wide && styles.statCellWide]}>
+                  <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
+                </View>
+              </View>
+            </AnimatedSection>
+            <AnimatedSection index={2}>
+              <View style={styles.progressPanel}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Performance</Text>
+
+                <PerformanceBar label="Accuracy" value={accuracy} color={category.green} theme={theme} />
+                <PerformanceBar label="Average Progress" value={averageProgress} color={category.orange} theme={theme} />
+                <PerformanceBar label="Practice Average" value={practiceAverage} color={category.blue} theme={theme} />
+                <PerformanceBar label="Exam Average" value={examAverage} color={category.purple} theme={theme} />
+              </View>
+            </AnimatedSection>
+          </SplitPane>
+        ) : (
+          <>
         <AnimatedSection index={1}>
           <View style={styles.statsRow}>
-            <StatBlock label="XP" value={String(totalXp)} theme={theme} />
-
-            <StatBlock label="Accuracy" value={`${accuracy}%`} theme={theme} />
-
-            <StatBlock label="Study Time" value={`${studyHours}h`} theme={theme} />
-
-            <StatBlock label="Materials" value={String(totalMaterials)} theme={theme} />
+            <View style={[styles.statCell, wide && styles.statCellWide]}>
+              <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
+            </View>
+            <View style={[styles.statCell, wide && styles.statCellWide]}>
+              <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
+            </View>
+            <View style={[styles.statCell, wide && styles.statCellWide]}>
+              <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
+            </View>
+            <View style={[styles.statCell, wide && styles.statCellWide]}>
+              <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
+            </View>
           </View>
         </AnimatedSection>
 
         <AnimatedSection index={2}>
-          <Card
-            backgroundColor={theme.card}
-            borderColor={theme.border}
-            shadowColor={theme.shadow}
-            radiusSize="lg"
-            style={styles.progressPanel}
-          >
+          <View style={styles.progressPanel}>
             <Text style={[styles.sectionTitle, { color: theme.text }]}>Performance</Text>
 
             <PerformanceBar label="Accuracy" value={accuracy} color={category.green} theme={theme} />
             <PerformanceBar label="Average Progress" value={averageProgress} color={category.orange} theme={theme} />
             <PerformanceBar label="Practice Average" value={practiceAverage} color={category.blue} theme={theme} />
             <PerformanceBar label="Exam Average" value={examAverage} color={category.purple} theme={theme} />
-          </Card>
+          </View>
         </AnimatedSection>
 
         <AnimatedSection index={3}>
-          <ListSection theme={theme} title="Academic identity" inset={dividerInset.none}>
-            <ListRow
+          <Rows theme={theme} title="Academic identity">
+            <Row
               theme={theme}
               label="School"
               value={profile?.school || "Not set"}
               chevron={false}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               label="Faculty"
               value={profile?.faculty || "Not set"}
               chevron={false}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               label="Department"
               value={profile?.department || "Not set"}
               chevron={false}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               label="Level"
               value={profile?.level || "Not set"}
               chevron={false}
             />
-          </ListSection>
+          </Rows>
         </AnimatedSection>
 
         <AnimatedSection index={4}>
-          <ListSection theme={theme} title="Account">
-            <ListRow
+          <Rows theme={theme} title="Account">
+            <Row
               theme={theme}
               icon="account-edit-outline"
               label="Edit Profile"
               onPress={() => router.push("/edit-profile")}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               icon="cog-outline"
               label="Settings"
               onPress={() => router.push("/settings")}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               icon="lifebuoy"
               label="Help & Support"
               onPress={() => setSupportOpen(true)}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               icon="crown"
               iconColor={category.yellow}
@@ -623,24 +758,26 @@ export default function ProfilePage() {
               onPress={() => router.push("/premium" as any)}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               icon="star-outline"
               label="Write a Review"
               onPress={openReviewPage}
             />
-          </ListSection>
+          </Rows>
 
-          <ListSection theme={theme} style={styles.signOut}>
-            <ListRow
+          <Rows theme={theme} style={styles.signOut}>
+            <Row
               theme={theme}
               label="Sign Out"
               destructive
               loading={loggingOut}
               onPress={handleLogout}
             />
-          </ListSection>
+          </Rows>
         </AnimatedSection>
+          </>
+        )}
       </PageHeader>
 
       <Modal transparent visible={reviewOpen} animationType="fade">
@@ -734,8 +871,8 @@ export default function ProfilePage() {
 
             {/* `plain` so these rows don't draw a second card inside the
                 dialog's own card. */}
-            <ListSection theme={theme} plain inset={dividerInset.glyph}>
-              <ListRow
+            <Rows theme={theme}>
+              <Row
                 theme={theme}
                 icon="phone"
                 label="Call"
@@ -744,7 +881,7 @@ export default function ProfilePage() {
                 onPress={callSupport}
               />
 
-              <ListRow
+              <Row
                 theme={theme}
                 icon="whatsapp"
                 label="WhatsApp"
@@ -752,7 +889,7 @@ export default function ProfilePage() {
                 onPress={openWhatsAppSupport}
               />
 
-              <ListRow
+              <Row
                 theme={theme}
                 icon="email-outline"
                 label="Email"
@@ -761,7 +898,7 @@ export default function ProfilePage() {
                 onPress={emailSupport}
               />
 
-              <ListRow
+              <Row
                 theme={theme}
                 icon="email-newsletter"
                 label="Info"
@@ -769,7 +906,7 @@ export default function ProfilePage() {
                 chevron={false}
                 onPress={() => Linking.openURL("mailto:info@lasuscholar.com")}
               />
-            </ListSection>
+            </Rows>
 
             <PrimaryButton
               label="Close"
@@ -835,25 +972,6 @@ function PerformanceBar({
  *
  * Deliberately mirrors `WeekStat` rather than inventing a third treatment.
  */
-function StatBlock({
-  label,
-  value,
-  theme,
-}: {
-  label: string;
-  value: string;
-  theme: Theme;
-}) {
-  return (
-    <View style={styles.statBlock}>
-      <Text style={[styles.statValue, { color: theme.text }]} numberOfLines={1}>
-        {value}
-      </Text>
-      <Text style={[styles.statLabel, { color: theme.muted }]}>{label}</Text>
-    </View>
-  );
-}
-
 // Circles: radius stays `size / 2` arithmetic rather than a radius token,
 // per the note in tokens.ts.
 const AVATAR = 96;
@@ -862,6 +980,12 @@ const CAMERA_BADGE = 34;
 const styles = StyleSheet.create({
   flex1: {
     flex: 1,
+  },
+
+  railFooter: {
+    marginTop: spacing.xxl,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
 
   // Extra separation so a destructive action doesn't read as just another group.
@@ -904,6 +1028,16 @@ const styles = StyleSheet.create({
   identitySection: {
     alignItems: "center",
     marginBottom: spacing.xxl,
+  },
+  // A masthead, not a centred badge: the avatar leads and the name sits
+  // beside it, so the block reads as the head of a page.
+  identityWide: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xl,
+  },
+  textStart: {
+    textAlign: "left",
   },
 
   avatar: {
@@ -970,24 +1104,18 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xxl,
   },
 
-  statBlock: {
-    // Half width rather than flex: wrapping needs a resolved basis, and flex
-    // would keep all four on one line.
+  // 50% wraps to 2x2 on a phone; 25% puts all four on one line once there
+  // is room. A resolved basis is required for wrapping — flex would keep them
+  // on one line at any width.
+  statCell: {
     width: "50%",
   },
-
-  statValue: type.display,
-
-  statLabel: {
-    ...type.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-    marginTop: spacing.xxs,
+  statCellWide: {
+    width: "25%",
   },
 
   progressPanel: {
-    padding: spacing.lg,
-    marginBottom: spacing.md,
+    marginBottom: spacing.xxl,
   },
 
   sectionHeader: {

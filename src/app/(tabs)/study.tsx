@@ -161,7 +161,28 @@ const tabs = ["Topics", "Materials", "Questions", "Cards"];
 const DECKS: { key: "all" | "saved" | "hard"; label: string }[] = [
   { key: "all", label: "All" },
   { key: "saved", label: "Saved" },
-  { key: "hard", label: "Hard" },
+  // "Struggled", not "Hard". hardCardIds is append-only — rating a card Hard
+  // adds it and nothing ever removes it, so a card later rated Good stays in
+  // this deck. The browser groups by the LIVE rating, so a pill called "Hard"
+  // would sit next to a "Hard" section holding different cards. Past tense
+  // says what the list actually is: everything you have ever found hard.
+  { key: "hard", label: "Struggled" },
+];
+
+/**
+ * Difficulty groups for the browser, ordered by how much attention each wants.
+ *
+ * Read from quickCardRatings, which holds the LATEST rating and was until now
+ * written and never read. "Save" is stored in the same field but is a bookmark
+ * rather than a difficulty judgement, so a card whose last action was Save
+ * carries no difficulty and falls into "New"; its saved state shows as a
+ * marker on the row instead.
+ */
+const CARD_GROUPS: { key: string; label: string; icon: IconName }[] = [
+  { key: "Again", label: "Again", icon: "refresh" },
+  { key: "Hard", label: "Hard", icon: "alert-circle-outline" },
+  { key: "New", label: "New", icon: "circle-outline" },
+  { key: "Good", label: "Good", icon: "check" },
 ];
 
 /** Opacity ramp for the header's soft bottom edge, densest at the top. */
@@ -734,6 +755,8 @@ export default function Study() {
   const [hardCardIds, setHardCardIds] = useState<string[]>([]);
   const [reviewMode, setReviewMode] = useState(false);
   const [hardReviewMode, setHardReviewMode] = useState(false);
+  const [cardsView, setCardsView] = useState<"player" | "browser">("player");
+  const [cardSearch, setCardSearch] = useState("");
   const [materialViewer, setMaterialViewer] = useState<{
     visible: boolean;
     material: Material | null;
@@ -2381,6 +2404,124 @@ export default function Study() {
       </View>
     );
   }
+  /**
+   * The deck browser: every card in the current deck, grouped by its live
+   * rating. A way IN to the player, not a replacement for it — tapping a row
+   * opens that card.
+   *
+   * This is the first and only reader of quickCardRatings.
+   */
+  function renderCardBrowser() {
+    const tone = selectedCourseTheme.color;
+    const query = cardSearch.trim().toLowerCase();
+
+    const visible = query
+      ? quickDeck.filter(
+          (card) =>
+            card.question.toLowerCase().includes(query) ||
+            answerText(card).toLowerCase().includes(query),
+        )
+      : quickDeck;
+
+    const groupColor: Record<string, string> = {
+      Again: theme.error,
+      Hard: theme.warning,
+      New: theme.muted2,
+      Good: theme.success,
+    };
+
+    return (
+      <View>
+        <View style={[styles.cardSearchBox, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <MaterialCommunityIcons name="magnify" size={18} color={theme.muted} />
+          <TextInput
+            value={cardSearch}
+            onChangeText={setCardSearch}
+            placeholder="Search cards"
+            placeholderTextColor={theme.muted}
+            style={[styles.cardSearchInput, noFocusRing, { color: theme.text }]}
+          />
+          {cardSearch.length > 0 ? (
+            <TouchableOpacity onPress={() => setCardSearch("")} hitSlop={10}>
+              <MaterialCommunityIcons name="close-circle" size={16} color={theme.muted} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {visible.length === 0 ? (
+          <EmptyState
+            theme={theme}
+            icon="card-search-outline"
+            title="No cards match"
+            text="Try a different search, or switch deck above."
+          />
+        ) : (
+          CARD_GROUPS.map((group) => {
+            // A card with no rating, or whose last action was Save, has no
+            // difficulty judgement — both land in "New".
+            const cards = visible.filter((card) => {
+              const rating = quickCardRatings[card.id];
+              const bucket = rating === "Again" || rating === "Hard" || rating === "Good" ? rating : "New";
+              return bucket === group.key;
+            });
+
+            if (cards.length === 0) return null;
+
+            return (
+              <View key={group.key}>
+                <Text style={[styles.cardGroupTitle, { color: theme.muted }]}>
+                  {group.label} · {cards.length}
+                </Text>
+
+                <View style={[styles.toc, { borderTopColor: theme.border }]}>
+                  {cards.map((card) => (
+                    <Pressable
+                      key={card.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${group.label}: ${card.question}`}
+                      onPress={() => {
+                        const index = quickDeck.findIndex((item) => item.id === card.id);
+                        if (index < 0) return;
+                        setQuickCardIndex(index);
+                        setShowBack(false);
+                        setCardsView("player");
+                      }}
+                      style={({ hovered }: any) => [
+                        styles.tocRow,
+                        { borderBottomColor: theme.border },
+                        hovered ? { backgroundColor: withAlpha(theme.text, 0.03) } : null,
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name={group.icon}
+                        size={20}
+                        color={groupColor[group.key]}
+                      />
+
+                      <Text
+                        numberOfLines={2}
+                        style={[styles.cardBrowserText, { color: theme.text }]}
+                      >
+                        {card.question}
+                      </Text>
+
+                      {/* Saved is orthogonal to difficulty — a card can be
+                          Good and bookmarked — so it marks the row rather
+                          than forming a fifth group. */}
+                      {savedCardIds.includes(card.id) ? (
+                        <MaterialCommunityIcons name="bookmark" size={16} color={theme.info} />
+                      ) : null}
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            );
+          })
+        )}
+      </View>
+    );
+  }
+
   function renderQuickCards() {
     if (questions.length === 0 || !currentQuickCard) {
       return (
@@ -2463,12 +2604,37 @@ export default function Study() {
               </Pressable>
             );
           })}
+
+          {/* Reuses the pill row rather than adding a second control strip —
+              switching view is the same kind of decision as switching deck. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: cardsView === "browser" }}
+            accessibilityLabel={cardsView === "browser" ? "Show the card player" : "Browse all cards"}
+            onPress={() => setCardsView(cardsView === "browser" ? "player" : "browser")}
+            style={({ hovered }: any) => [
+              styles.deckViewToggle,
+              { borderColor: theme.border },
+              hovered ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
+              cardsView === "browser" ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
+            ]}
+          >
+            <MaterialCommunityIcons
+              name={cardsView === "browser" ? "cards-outline" : "format-list-bulleted"}
+              size={17}
+              color={theme.text}
+            />
+          </Pressable>
         </View>
 
-        <Text style={[styles.quickCount, { color: theme.muted }]}>
-          {quickCardIndex + 1} of {quickDeck.length}
-        </Text>
+        {cardsView === "browser" ? null : (
+          <Text style={[styles.quickCount, { color: theme.muted }]}>
+            {quickCardIndex + 1} of {quickDeck.length}
+          </Text>
+        )}
 
+        {cardsView === "browser" ? renderCardBrowser() : (
+        <>
         {/* Where you are in the deck — the old header said "3 of 12" but gave
             no sense of how much was left. */}
         <View style={[styles.deckTrack, { backgroundColor: theme.soft }]}>
@@ -2563,6 +2729,8 @@ export default function Study() {
           <Text style={[styles.nextText, { color: theme.onAccent }]}>Next card</Text>
           <MaterialCommunityIcons name="arrow-right" size={18} color={theme.onAccent} />
         </TouchableOpacity>
+        </>
+        )}
       </View>
     );
   }
@@ -3281,6 +3449,42 @@ const styles = StyleSheet.create({
 
   quickCardScreen: {
     gap: spacing.lg,
+  },
+  deckViewToggle: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cardSearchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing.lg,
+    minHeight: 44,
+    marginBottom: spacing.lg,
+  },
+  cardSearchInput: {
+    flex: 1,
+    ...typeScale.body,
+    fontWeight: weight.regular,
+    paddingVertical: 0,
+  },
+  cardGroupTitle: {
+    ...typeScale.caption,
+    letterSpacing: 0,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
+  },
+  cardBrowserText: {
+    flex: 1,
+    minWidth: 0,
+    ...typeScale.body,
+    fontWeight: weight.medium,
   },
   deckPills: {
     flexDirection: "row",

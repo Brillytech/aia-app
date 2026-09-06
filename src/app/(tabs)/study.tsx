@@ -31,6 +31,7 @@ import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
+import { FolderIcon } from "../../ui/FolderIcon";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import { elevation, layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
@@ -1823,44 +1824,80 @@ export default function Study() {
                       },
                     ]}
                   >
-                    <View style={styles.courseTileTop}>
-                      {/* The one place the course hue appears. Background stays
-                          neutral on purpose — a tinted tile made colour
-                          decorative rather than identifying. */}
-                      <MaterialCommunityIcons
-                        name={courseTheme.icon}
-                        size={28}
-                        color={courseTheme.color}
-                      />
+                    {({ pressed }: any) => (
+                      <>
+                        {/* The folder from the dashboard's Continue learning
+                            card, at tile scale. It is the only thing carrying
+                            the course hue — the tile itself stays neutral.
 
-                      {/* Absent codes drop the badge entirely rather than
-                          rendering an empty pill. courseCode() is the same test
-                          the sort uses. */}
-                      {code ? (
-                        <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
-                          <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
-                            {code}
+                            `pulse` already existed at the top of this file:
+                            a 1 -> 1.018 loop on the native driver that was
+                            started, looped forever and read by nothing. This
+                            is its consumer. */}
+                        {/* Two wrappers, not one. The pulse writes transform
+                            every frame; a CSS transition on the same property
+                            would try to interpolate toward each of those
+                            frames and fight it. So the loop owns the outer
+                            transform and the press-driven tilt owns the inner
+                            one, and neither touches the other's property. */}
+                        <Animated.View
+                          style={[styles.courseFolder, { transform: [{ scale: pulse }] }]}
+                        >
+                          <View
+                            style={{
+                              transform: [
+                                { translateY: pressed ? -4 : 0 },
+                                { rotate: pressed ? "-5deg" : "-3deg" },
+                              ],
+                              transitionProperty: "transform",
+                              transitionDuration: motionTokens.base,
+                            }}
+                          >
+                          <FolderIcon color={courseTheme.color} size={52} open={pressed} />
+
+                          {/* The course's own admin-set glyph, on the folder's
+                              front face rather than centred on the whole
+                              shape — same placement dashboard uses. */}
+                          <View style={[styles.courseFolderGlyph, { bottom: pressed ? 6 : 9 }]}>
+                            <MaterialCommunityIcons
+                              name={courseTheme.icon}
+                              size={15}
+                              color={theme.onAccent}
+                            />
+                          </View>
+                          </View>
+                        </Animated.View>
+
+                        <View style={styles.courseTileText}>
+                          <View style={styles.courseTileTop}>
+                            {/* No numberOfLines: the full name always shows and
+                                wraps as far as it needs. The reserved second
+                                line is gone — that was 48px every tile paid
+                                whether it used them or not. */}
+                            <Text style={[styles.courseTileName, { color: theme.text }]}>
+                              {course.title}
+                            </Text>
+
+                            {/* Absent codes drop the badge entirely rather than
+                                rendering an empty pill. courseCode() is the
+                                same test the sort uses. */}
+                            {code ? (
+                              <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
+                                <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
+                                  {code}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+
+                          <Text style={[styles.courseMeta, { color: theme.muted }]} numberOfLines={1}>
+                            {course.department && course.level
+                              ? `${course.department} • ${course.level}`
+                              : "Not assigned"}
                           </Text>
                         </View>
-                      ) : null}
-                    </View>
-
-                    {/* No numberOfLines: the full course name always shows,
-                        wrapping as far as it needs. minHeight reserves the
-                        second line so a one-line name does not sit shorter
-                        than its neighbours where there is no row to stretch
-                        against. */}
-                    <Text style={[styles.courseTileName, { color: theme.text }]}>
-                      {course.title}
-                    </Text>
-
-                    <View style={styles.flex1} />
-
-                    <Text style={[styles.courseMeta, { color: theme.muted }]} numberOfLines={1}>
-                      {course.department && course.level
-                        ? `${course.department} • ${course.level}`
-                        : "Not assigned"}
-                    </Text>
+                      </>
+                    )}
                   </Pressable>
                 </View>
               );
@@ -3071,15 +3108,33 @@ const styles = StyleSheet.create({
   courseTile: {
     flex: 1,
     minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.lg,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.lg,
+    // 12 rather than 16, and the folder sits beside the text rather than above
+    // it: together those take the tile from 148pt to roughly 86.
+    padding: spacing.md,
+  },
+  courseFolder: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  courseFolderGlyph: {
+    position: "absolute",
+    // On the folder's front face, not centred on the whole shape.
+    alignSelf: "center",
+  },
+  courseTileText: {
+    flex: 1,
+    minWidth: 0,
   },
   courseTileTop: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
-    marginBottom: spacing.md,
+    gap: spacing.md,
   },
   courseBadge: {
     paddingHorizontal: spacing.sm,
@@ -3091,10 +3146,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   courseTileName: {
-    ...typeScale.section,
-    // Two lines of section (24pt each), reserved so a one-line course does not
-    // sit shorter than its neighbours on narrow, where there is no row.
-    minHeight: 48,
+    flex: 1,
+    minWidth: 0,
+    ...typeScale.bodyLg,
+    fontWeight: weight.bold,
   },
   // Compact row, rail only.
   courseRowName: {

@@ -157,6 +157,13 @@ const COURSE_RAIL = 320;
 
 const tabs = ["Topics", "Materials", "Questions", "Cards"];
 
+/** The three flashcard decks, in the order the auto-cycle already visits them. */
+const DECKS: { key: "all" | "saved" | "hard"; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "saved", label: "Saved" },
+  { key: "hard", label: "Hard" },
+];
+
 /** Opacity ramp for the header's soft bottom edge, densest at the top. */
 const FADE_STEPS = [0.92, 0.72, 0.48, 0.26, 0.1, 0];
 const FADE_HEIGHT = 24;
@@ -2386,11 +2393,6 @@ export default function Study() {
       );
     }
     const tone = selectedCourseTheme.color;
-    const deckLabel = hardReviewMode
-      ? "Hard review"
-      : reviewMode
-        ? "Saved review"
-        : "Quick cards";
     const deckProgress =
       quickDeck.length > 0 ? ((quickCardIndex + 1) / quickDeck.length) * 100 : 0;
 
@@ -2403,26 +2405,69 @@ export default function Study() {
 
     return (
       <View style={styles.quickCardScreen}>
-        <View style={styles.quickTopRow}>
-          <Text style={[styles.quickCount, { color: theme.muted }]}>
-            {deckLabel} · {quickCardIndex + 1} of {quickDeck.length}
-          </Text>
+        <View style={styles.deckPills}>
+          {/* Deck mode was reachable two ways, neither of them visible: a
+              "N saved" text link that only existed once you had saved
+              something, and an automatic All -> Saved -> Hard cycle at the end
+              of a deck. The cycle still runs; these just make the same three
+              decks selectable directly, with their sizes shown.
 
-          {savedCardIds.length > 0 && !hardReviewMode && (
-            <TouchableOpacity
-              onPress={() => {
-                setReviewMode(!reviewMode);
-                setQuickCardIndex(0);
-                setShowBack(false);
-              }}
-              hitSlop={8}
-            >
-              <Text style={[styles.savedToggle, { color: tone }]}>
-                {reviewMode ? "All cards" : `${savedCardIds.length} saved`}
-              </Text>
-            </TouchableOpacity>
-          )}
+              Empty decks stay in place and go inert rather than disappearing,
+              so the row does not reshuffle as you save your first card. */}
+          {DECKS.map((deck) => {
+            const count =
+              deck.key === "saved"
+                ? savedCardIds.length
+                : deck.key === "hard"
+                  ? hardCardIds.length
+                  : questions.length;
+
+            const active =
+              deck.key === "hard"
+                ? hardReviewMode
+                : deck.key === "saved"
+                  ? reviewMode && !hardReviewMode
+                  : !reviewMode && !hardReviewMode;
+
+            const empty = count === 0;
+
+            return (
+              <Pressable
+                key={deck.key}
+                disabled={empty}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active, disabled: empty }}
+                accessibilityLabel={`${deck.label} deck, ${count} cards`}
+                onPress={() => {
+                  setReviewMode(deck.key === "saved");
+                  setHardReviewMode(deck.key === "hard");
+                  setQuickCardIndex(0);
+                  setShowBack(false);
+                }}
+                style={({ hovered }: any) => [
+                  styles.deckPill,
+                  { borderColor: theme.border },
+                  hovered && !active && !empty ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
+                  active ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
+                  empty ? styles.deckPillEmpty : null,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.deckPillText,
+                    { color: active ? theme.text : theme.muted },
+                  ]}
+                >
+                  {deck.label} · {count}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
+
+        <Text style={[styles.quickCount, { color: theme.muted }]}>
+          {quickCardIndex + 1} of {quickDeck.length}
+        </Text>
 
         {/* Where you are in the deck — the old header said "3 of 12" but gave
             no sense of how much was left. */}
@@ -2432,7 +2477,8 @@ export default function Study() {
               styles.deckFill,
               {
                 width: `${deckProgress}%`,
-                backgroundColor: tone,
+                // Progress, not identity — the course hue said nothing here.
+                backgroundColor: withAlpha(theme.text, 0.28),
                 transitionProperty: "width",
                 transitionDuration: motionTokens.base,
               },
@@ -2445,8 +2491,12 @@ export default function Study() {
             style={[
               styles.quickCard,
               {
-                backgroundColor: withAlpha(tone, isDark ? 0.16 : 0.09),
-                borderColor: withAlpha(tone, isDark ? 0.32 : 0.24),
+                // Still boxed — a flashcard is a genuinely distinct object, which
+                // is the exception the no-surfaces rule allows. Just not tinted:
+                // the hue washed the body, the border and the chip while
+                // identifying nothing the glyph does not.
+                backgroundColor: theme.card,
+                borderColor: theme.border,
                 // A small hinge on flip, rather than the content just swapping.
                 transform: [{ perspective: 700 }, { rotateX: showBack ? "3deg" : "0deg" }],
                 transitionProperty: "transform, background-color",
@@ -2457,7 +2507,7 @@ export default function Study() {
             <View
               style={[
                 styles.quickChip,
-                { backgroundColor: withAlpha(tone, isDark ? 0.26 : 0.18) },
+                { backgroundColor: theme.soft },
               ]}
             >
               <MaterialCommunityIcons
@@ -2465,7 +2515,7 @@ export default function Study() {
                 size={14}
                 color={tone}
               />
-              <Text style={[styles.quickChipText, { color: tone }]}>
+              <Text style={[styles.quickChipText, { color: theme.muted }]}>
                 {showBack ? "Answer" : "Question"}
               </Text>
             </View>
@@ -2493,13 +2543,12 @@ export default function Study() {
               <TouchableOpacity
                 key={key}
                 onPress={() => rateQuickCard(key)}
-                style={[
-                  styles.ratingBtn,
-                  { backgroundColor: withAlpha(color, isDark ? 0.22 : 0.14) },
-                ]}
+                style={[styles.ratingBtn, { borderColor: theme.border }]}
               >
                 <MaterialCommunityIcons name={icon} size={18} color={color} />
-                <Text style={[styles.ratingText, { color }]}>{key}</Text>
+                {/* The glyph carries the meaning; the label stays neutral so four
+                    filled blocks do not compete with each other. */}
+                <Text style={[styles.ratingText, { color: theme.text }]}>{key}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -2507,7 +2556,9 @@ export default function Study() {
 
         <TouchableOpacity
           onPress={moveToNextQuickCard}
-          style={[styles.nextBtn, { backgroundColor: tone }]}
+          // Primary actions belong to the brand; course and mode hues tint
+          // context. Identical on an orange course, correct on a blue one.
+          style={[styles.nextBtn, { backgroundColor: theme.accent }]}
         >
           <Text style={[styles.nextText, { color: theme.onAccent }]}>Next card</Text>
           <MaterialCommunityIcons name="arrow-right" size={18} color={theme.onAccent} />
@@ -3231,20 +3282,32 @@ const styles = StyleSheet.create({
   quickCardScreen: {
     gap: spacing.lg,
   },
-  quickTopRow: {
+  deckPills: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.md,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    flexWrap: "wrap",
+  },
+  deckPill: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 30,
+    justifyContent: "center",
+  },
+  // Inert rather than hidden, so the row does not reshuffle when the first
+  // card is saved.
+  deckPillEmpty: {
+    opacity: 0.4,
+  },
+  deckPillText: {
+    ...typeScale.caption,
+    letterSpacing: 0,
   },
   quickCount: {
     ...typeScale.caption,
     fontWeight: weight.regular,
-    letterSpacing: 0,
-  },
-  savedToggle: {
-    ...typeScale.caption,
-    fontWeight: weight.bold,
     letterSpacing: 0,
   },
   deckTrack: {
@@ -3297,6 +3360,7 @@ const styles = StyleSheet.create({
   },
   ratingBtn: {
     flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.md,
     paddingVertical: spacing.md,
     alignItems: "center",

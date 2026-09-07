@@ -5,7 +5,8 @@ import { useServiceWorker } from "../pwa/useServiceWorker";
 import { useThemeMode } from "../theme";
 import { AppBanner } from "../ui/AppBanner";
 import { useIsDesktop } from "../ui/layout/breakpoints";
-import { elevation, shade } from "../ui/tokens";
+import { elevation } from "../ui/tokens";
+import { appSurfaces, useThemeChrome } from "../ui/useThemeChrome";
 
 /**
  * Width of the app column on large screens.
@@ -56,20 +57,14 @@ export default function RootLayout() {
           ? "ios"
           : null;
 
-  // The surround always recedes and the column always reads as the lit
-  // surface — the same depth model in both themes.
-  //
-  // The first attempt tinted the surround with `theme.text`, which inverted
-  // between modes: measured, it produced a surround DARKER than the column in
-  // light (#efebe4 vs #fbf7ef) but LIGHTER than it in dark (#272c34 vs
-  // #050b16). Content receded on dark and advanced on light, which is why the
-  // dark surround read wrong.
-  //
-  // In dark there is no room to go darker — the page ground is already
-  // #050B16 — so depth comes from lifting the column instead of sinking the
-  // surround, plus a shadow that works on both.
-  const surround = dark ? shade(theme.bg, -0.45) : shade(theme.bg, -0.06);
-  const columnBg = dark ? shade(theme.bg, 0.05) : theme.bg;
+  // Both grounds come from one place now, because the document body and the
+  // browser's own chrome have to agree with them — see appSurfaces.
+  const { surround, column: columnBg } = appSurfaces(theme);
+
+  // Paints the PWA status bar and the page ground to match. Without it the
+  // app was black in dark mode with a cream strip above it and cream slivers
+  // at the edges, because index.html's colours never followed the theme.
+  useThemeChrome(theme);
 
   return (
     <View

@@ -3,7 +3,6 @@ import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -22,6 +21,7 @@ import { supabase } from "../../../lib/supabase";
 import { category, Theme, useThemeMode } from "../../theme";
 import type { IconName } from "../../ui/alerts";
 import { AnimatedSection } from "../../ui/AnimatedSection";
+import { Avatar } from "../../ui/Avatar";
 import { PrimaryButton } from "../../ui/Button";
 import { Wordmark } from "../../ui/Wordmark";
 import { haptics } from "../../ui/haptics";
@@ -53,7 +53,6 @@ import {
   withAlpha,
 } from "../../ui/tokens";
 
-const logo = require("../../../assets/ls-logo.png");
 
 type Profile = {
   username: string | null;
@@ -1201,10 +1200,11 @@ export default function Dashboard() {
                   router.push("/leaderboard" as any);
                 }}
                 hitSlop={10}
+                style={[styles.barIcon, { backgroundColor: theme.soft }]}
               >
                 <MaterialCommunityIcons
                   name="trophy-outline"
-                  size={22}
+                  size={20}
                   color={theme.text}
                 />
               </Pressable>
@@ -1215,10 +1215,11 @@ export default function Dashboard() {
                   router.push("/notifications" as any);
                 }}
                 hitSlop={10}
+                style={[styles.barIcon, { backgroundColor: theme.soft }]}
               >
                 <MaterialCommunityIcons
                   name="bell-outline"
-                  size={22}
+                  size={20}
                   color={theme.text}
                 />
 
@@ -1242,12 +1243,15 @@ export default function Dashboard() {
                   router.push("/profile" as any);
                 }}
                 hitSlop={10}
-                style={[styles.avatar, { borderColor: theme.border }]}
               >
-                <Image
-                  source={avatarUrl ? { uri: avatarUrl } : logo}
-                  style={styles.avatarImage}
-                  resizeMode="cover"
+                {/* Initials, not the app's logo. The mark already sits in this
+                    same bar on the left, and a brand mark in the slot that means
+                    "you" says the account belongs to the app. */}
+                <Avatar
+                  theme={theme}
+                  uri={avatarUrl}
+                  name={studentName}
+                  size={AVATAR}
                 />
               </Pressable>
             </View>
@@ -2115,17 +2119,15 @@ const styles = StyleSheet.create({
   },
 
   // Pinned bar
-  avatar: {
+  // Matches the avatar's disc so the three trailing controls are one row of
+  // equal targets. Bare 22px glyphs beside a bordered 32px circle read as
+  // two different kinds of thing.
+  barIcon: {
     width: AVATAR,
     height: AVATAR,
-    // Circles stay `size / 2` arithmetic, per the note in tokens.ts.
     borderRadius: AVATAR / 2,
-    borderWidth: 1,
-    overflow: "hidden",
-  },
-  avatarImage: {
-    width: "100%",
-    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
   },
   barStatus: {
     flexDirection: "row",
@@ -2149,8 +2151,8 @@ const styles = StyleSheet.create({
   },
   badge: {
     position: "absolute",
-    top: -5,
-    right: -7,
+    top: -2,
+    right: -2,
     minWidth: 16,
     height: 16,
     borderRadius: radius.pill,

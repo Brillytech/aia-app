@@ -20,7 +20,14 @@
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#FBF7EF" />
+    <!-- First paint only. These answer the OS; the app's theme is its own
+         toggle and can disagree, so `useThemeChrome` replaces both tags with
+         a single unconditional one as soon as the saved theme is known.
+
+         The dark value is `appSurfaces(darkTheme).column`, i.e.
+         shade(#050B16, 0.05). If that expression changes, change this. -->
+    <meta name="theme-color" content="#FBF7EF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121722" media="(prefers-color-scheme: dark)" />
 
     <!-- iOS has never supported the manifest's display/icon fields; Safari
          reads these instead, and they are what makes an added-to-home-screen
@@ -62,8 +69,21 @@
         /* The app scrolls its own views; the document itself must not. */
         overflow: hidden;
         /* Paint the brand background immediately, so a cold start does not
-           flash white before the bundle mounts. Matches lightTheme.bg. */
+           flash white before the bundle mounts. Matches lightTheme.bg.
+
+           This is also what shows in the safe-area insets and during
+           rubber-band overscroll, which is why a hard-coded cream left a
+           cream strip above the app and cream slivers at its edges in dark
+           mode. Same story as the theme-color tags above: the media query is
+           the first-paint guess, `useThemeChrome` sets the real value. */
         background-color: #fbf7ef;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background-color: #121722;
+        }
       }
 
       #root {

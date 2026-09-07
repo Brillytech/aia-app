@@ -68,12 +68,16 @@ export const type = {
 // apart, and cards no longer draw a border. Dark mode separates by surface
 // hue instead (`card #101A2D` on `bg #07101F`) and barely renders shadows at
 // all, so the same numbers are harmless there.
-export function elevation(level: 0 | 1 | 2 | 3, shadowColor: string) {
+export function elevation(level: 0 | 1 | 2 | 3 | 4, shadowColor: string) {
   const presets = {
     0: { shadowOpacity: 0, shadowRadius: 0, elevation: 0, shadowOffset: { width: 0, height: 0 } },
     1: { shadowOpacity: 0.06, shadowRadius: 10, elevation: 2, shadowOffset: { width: 0, height: 4 } },
     2: { shadowOpacity: 0.09, shadowRadius: 16, elevation: 4, shadowOffset: { width: 0, height: 8 } },
     3: { shadowOpacity: 0.12, shadowRadius: 22, elevation: 6, shadowOffset: { width: 0, height: 12 } },
+    // Reserved for a screen's single most important surface. Level 3 is
+    // already the hover state of a course tile, so a hero that rests at 3
+    // has nowhere to go on hover. Nothing else should reach for this.
+    4: { shadowOpacity: 0.16, shadowRadius: 30, elevation: 8, shadowOffset: { width: 0, height: 16 } },
   } as const;
 
   return { shadowColor, ...presets[level] };

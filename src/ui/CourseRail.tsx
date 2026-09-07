@@ -40,11 +40,32 @@ export function CourseRail({
   theme,
   courses,
   onPressCourse,
+  wrap = false,
 }: {
   theme: Theme;
   courses: RailCourse[];
   onPressCourse: (courseId: string) => void;
+  /**
+   * Wrap onto rows instead of scrolling horizontally.
+   *
+   * Flicking is the right gesture with a thumb and the wrong one with a
+   * mouse: a horizontal scroller on a desktop hides courses behind a
+   * gesture that has no visible affordance. The ring itself does not
+   * change — only whether the row ends or continues.
+   */
+  wrap?: boolean;
 }) {
+  const rings = courses.map((course) => (
+    <CourseRing
+      key={course.id}
+      theme={theme}
+      course={course}
+      onPress={() => onPressCourse(course.id)}
+    />
+  ));
+
+  if (wrap) return <View style={styles.wrapped}>{rings}</View>;
+
   return (
     <ScrollView
       horizontal
@@ -54,14 +75,7 @@ export function CourseRail({
       snapToInterval={ITEM_WIDTH + spacing.lg}
       decelerationRate="fast"
     >
-      {courses.map((course) => (
-        <CourseRing
-          key={course.id}
-          theme={theme}
-          course={course}
-          onPress={() => onPressCourse(course.id)}
-        />
-      ))}
+      {rings}
     </ScrollView>
   );
 }
@@ -155,6 +169,17 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
     // Matches the screen gutter so the first ring lines up with the section
     // heading above it, while the rail itself still bleeds to both edges.
+    paddingHorizontal: 20,
+    paddingVertical: spacing.xs,
+  },
+  // Same metrics as `rail`, minus the scrolling. Keeping the horizontal
+  // padding matters: the block around it carries a negative gutter so the
+  // rail can bleed to the screen edges, and this puts the first ring back
+  // on the gutter line under the heading.
+  wrapped: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.lg,
     paddingHorizontal: 20,
     paddingVertical: spacing.xs,
   },

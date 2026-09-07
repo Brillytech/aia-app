@@ -11,19 +11,32 @@ import {
   TextInput,
   View,
 } from "react-native";
-import Reanimated from "react-native-reanimated";
+import Reanimated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
 import { supabase } from "../../../lib/supabase";
 import { category, Theme, useThemeMode } from "../../theme";
-import { useContentInset } from "../../ui/layout/breakpoints";
 import type { IconName } from "../../ui/alerts";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
-import { CourseRail } from "../../ui/CourseRail";
 import { Wordmark } from "../../ui/Wordmark";
 import { haptics } from "../../ui/haptics";
 import { HintBadge } from "../../ui/HintBadge";
-import { FolderIcon } from "../../ui/FolderIcon";
-import { dividerInset, ListRow, ListSection } from "../../ui/List";
+import { FOLDER_OPEN_MS } from "../../ui/CourseFolder";
+import { CourseWell } from "../../ui/CourseWell";
+import { CourseRail } from "../../ui/CourseRail";
+import {
+  DESKTOP_MIN_WIDTH,
+  useBreakpoint,
+  useContentInset,
+} from "../../ui/layout/breakpoints";
+import { SplitPane } from "../../ui/layout/SplitPane";
+import { Row, Rows } from "../../ui/Rows";
+import { Stat } from "../../ui/Stat";
 import { PageHeader } from "../../ui/PageHeader";
 import { ProgressRing } from "../../ui/ProgressRing";
 import { Screen } from "../../ui/Screen";
@@ -33,10 +46,10 @@ import {
   motion as motionTokens,
   noFocusRing,
   radius,
-  shade,
   spacing,
   type,
   weight,
+  elevation,
   withAlpha,
 } from "../../ui/tokens";
 
@@ -106,6 +119,25 @@ type WeeklyStats = {
   practiceAccuracy: number;
   rank: string;
 };
+
+/**
+ * Width at which the dashboard becomes two columns.
+ *
+ * Matches profile's, and for the same reason: this screen sits behind the
+ * 240px sidebar, so the usable content area is the window minus that rail.
+ */
+const DASHBOARD_SPLIT = 1240;
+
+/**
+ * The hero's progress bar fills on load rather than arriving already full.
+ *
+ * The delay is the point: the well has settled by about 700ms, so starting
+ * the bar at 300 puts it in the middle of that and gives the eye an order to
+ * follow — folder, then bar, then button. Starting both at zero reads as one
+ * event and you notice neither.
+ */
+const HERO_SWEEP_DELAY = 300;
+const HERO_SWEEP_MS = 900;
 
 const DEFAULT_GOALS: UserGoal = {
   daily_questions_goal: 20,
@@ -206,7 +238,24 @@ export default function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [continuePressed, setContinuePressed] = useState(false);
+  const wide = useBreakpoint(DASHBOARD_SPLIT);
+  // Not DASHBOARD_SPLIT. That one asks "is there room for two columns";
+  // this asks "is this a desktop", which is what the hero's button
+  // placement and the course rail's wrapping both actually depend on.
+  const isDesktop = useBreakpoint(DESKTOP_MIN_WIDTH);
+  // Which course is mid-open, hero included. A press lasts about 100ms and the
+  // folder sequence runs 640, so navigation waits for it rather than binding
+  // to the press — see CourseFolder.
+  const [openingId, setOpeningId] = useState<string | null>(null);
+
+  function openCourseWithFolder(id: string, go: () => void) {
+    if (openingId) return;
+    setOpeningId(id);
+    setTimeout(() => {
+      setOpeningId(null);
+      go();
+    }, FOLDER_OPEN_MS);
+  }
 
   useEffect(() => {
     loadDashboard();
@@ -1022,22 +1071,58 @@ export default function Dashboard() {
   }
 
   const courseAccent = subjectColor(nextCourse, 0);
-  // Ink for anything sitting ON the hue. theme.onAccent is white in both
-  // modes, which fails badly against the lighter category hues (yellow and
-  // green are ~2:1). A heavily darkened version of the hue itself clears 3.7:1
-  // against every one of them and reads as deliberate rather than corrective.
-  const courseInk = shade(courseAccent, -0.75);
-  // The raw hue only works as *text* in dark mode. On the pale tinted panel a
-  // light-mode yellow label is ~1.9:1, so light darkens the hue and dark
-  // lightens it — same colour identity, legible either way.
-  const courseType = isDark
-    ? shade(courseAccent, 0.28)
-    : shade(courseAccent, -0.42);
 
   // Scoped to the course this card is actually about. It used to show
   // catalogue-wide progress while sitting under one course's title and topic,
   // which read as that course being further along than it was.
   const continueStats = nextCourse ? getCourseStats(nextCourse.id) : null;
+
+  // Driven by a shared value rather than a CSS width transition, because a
+  // transition has no previous value to animate from on first paint — it
+  // would simply appear at its final width. This covers later updates too,
+  // which is why the old transitionProperty is gone rather than kept
+  // alongside it; two systems animating one width is how you get a stutter.
+  const heroProgress = useSharedValue(0);
+
+  useEffect(() => {
+    heroProgress.value = withDelay(
+      HERO_SWEEP_DELAY,
+      withTiming(continueStats?.progress ?? 0, {
+        duration: HERO_SWEEP_MS,
+        easing: Easing.out(Easing.cubic),
+      }),
+    );
+  }, [continueStats?.progress, heroProgress]);
+
+  const heroFillStyle = useAnimatedStyle(() => ({
+    width: `${heroProgress.value}%`,
+  }));
+
+  // Everything the hero needs except its handler, so the two branches below
+  // spread one object instead of repeating a dozen props each. The handler
+  // stays in JSX at each call site deliberately — see the note on
+  // ContinueHero for why it must not move into here.
+  const heroProps = {
+    theme,
+    dark: isDark,
+    color: courseAccent,
+    icon: subjectIcon(nextCourse),
+    title:
+      nextCourse?.title || (hasCourses ? "Topics coming soon" : "Learning starts soon"),
+    topic:
+      nextTopic?.title ||
+      (hasCourses
+        ? "Your course content will appear here."
+        : "Your courses will appear once setup is ready."),
+    counts:
+      continueStats && continueStats.total > 0
+        ? `${continueStats.done} of ${continueStats.total} topics`
+        : null,
+    percent: continueStats?.progress ?? 0,
+    inlineCta: isDesktop,
+    opening: openingId === (nextCourse?.id ? String(nextCourse.id) : "hero"),
+    fillStyle: heroFillStyle,
+  };
 
   // Flattened for the rail, which takes plain data rather than reaching back
   // into this screen's course/topic/progress state.
@@ -1211,125 +1296,333 @@ export default function Dashboard() {
             goals card below it, so the hero read as the weakest thing on the
             screen; a tinted panel gives it weight without making it a peer of
             the neutral cards. */}
-        <AnimatedSection index={0}>
-          <Pressable
-            onPress={() =>
-              hasContent && nextTopic
-                ? openInStudy(nextTopic.course_id, nextTopic.id)
-                : router.push("/study" as any)
-            }
-            onPressIn={() => setContinuePressed(true)}
-            onPressOut={() => setContinuePressed(false)}
-          >
-            <Reanimated.View
-              style={[
-                styles.continueBlock,
-                {
-                  backgroundColor: withAlpha(courseAccent, isDark ? 0.16 : 0.1),
-                  borderColor: withAlpha(courseAccent, isDark ? 0.3 : 0.2),
-                  transform: [{ scale: continuePressed ? 0.985 : 1 }],
-                  transitionProperty: "transform",
-                  transitionDuration: motionTokens.base,
-                },
-              ]}
-            >
-              <View style={styles.continueHead}>
-                <Text style={[styles.continueEyebrow, { color: courseType }]}>
-                  Pick up where you stopped
-                </Text>
+        {wide ? (
+          <SplitPane
+            theme={theme}
+            // Main is what you act on; the rail is what you check. Recommended
+            // is a link you follow, so it belongs with the actions, while the
+            // stats are read and left alone.
+            side="end"
+            railWidth={320}
+            divider={false}
+            rail={
+              <View>
+                <AnimatedSection index={1}>
+                  <View style={styles.goalsBlock}>
+                    <View style={styles.blockHeader}>
+                      <Text style={[styles.blockTitle, { color: theme.muted }]}>
+                        Today&apos;s goals
+                      </Text>
 
-                {continueStats && continueStats.total > 0 ? (
-                  <Text style={[styles.continueCount, { color: courseType }]}>
-                    {continueStats.done}/{continueStats.total}
-                  </Text>
-                ) : null}
-              </View>
+                      <Pressable
+                        onPress={() => {
+                          haptics.tap();
+                          setGoalDraft(goals);
+                          setEditingGoals(!editingGoals);
+                        }}
+                        hitSlop={10}
+                        style={styles.blockAction}
+                      >
+                        <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                          {editingGoals ? "Cancel" : "Edit"}
+                        </Text>
+                      </Pressable>
+                    </View>
 
-              <View style={styles.continueRow}>
-                {/* Tilted at rest, and it lifts and opens under the thumb —
-                    the same object responding, not a separate hover state. */}
-                <Reanimated.View
-                  style={[
-                    styles.folderWrap,
-                    {
-                      transform: [
-                        { translateY: continuePressed ? -5 : 0 },
-                        { rotate: continuePressed ? "-5deg" : "-3deg" },
-                      ],
-                      transitionProperty: "transform",
-                      transitionDuration: motionTokens.base,
-                    },
-                  ]}
-                >
-                  <FolderIcon color={courseAccent} size={104} open={continuePressed} />
+                    {editingGoals ? (
+                      <View style={styles.goalEditBox}>
+                        <GoalInput
+                          theme={theme}
+                          label="Questions per day"
+                          value={goalDraft.daily_questions_goal}
+                          onChange={(value) =>
+                            setGoalDraft((prev) => ({
+                              ...prev,
+                              daily_questions_goal: value,
+                            }))
+                          }
+                        />
 
-                  <View style={styles.folderGlyph}>
-                    <MaterialCommunityIcons
-                      name={subjectIcon(nextCourse)}
-                      size={22}
-                      color={courseInk}
-                    />
+                        <GoalInput
+                          theme={theme}
+                          label="Topics per day"
+                          value={goalDraft.daily_topics_goal}
+                          onChange={(value) =>
+                            setGoalDraft((prev) => ({
+                              ...prev,
+                              daily_topics_goal: value,
+                            }))
+                          }
+                        />
+
+                        <GoalInput
+                          theme={theme}
+                          label="Materials per day"
+                          value={goalDraft.daily_materials_goal}
+                          onChange={(value) =>
+                            setGoalDraft((prev) => ({
+                              ...prev,
+                              daily_materials_goal: value,
+                            }))
+                          }
+                        />
+
+                        <PrimaryButton
+                          label={savingGoals ? "Saving..." : "Save goals"}
+                          onPress={saveUserGoals}
+                          disabled={savingGoals}
+                          color={theme.accent}
+                          textColor={theme.onAccent}
+                        />
+                      </View>
+                    ) : (
+                      <View style={styles.goalsBody}>
+                        {/* The ring is the day in one number and the bars break it
+                            down — pairing them side by side is the structure the card
+                            was providing, minus the box. */}
+                        <ProgressRing
+                          percent={todayPercent}
+                          size={88}
+                          strokeWidth={8}
+                          trackColor={theme.soft}
+                          progressColor={theme.accent}
+                          textColor={theme.text}
+                          label="today"
+                        />
+
+                        <View style={styles.goalRows}>
+                          <GoalProgressRow
+                            theme={theme}
+                            label="Questions"
+                            value={`${dailyProgress.questionsAnswered} / ${goals.daily_questions_goal}`}
+                            percent={questionsPercent}
+                            color={category.orange}
+                          />
+                          <GoalProgressRow
+                            theme={theme}
+                            label="Topics"
+                            value={`${dailyProgress.topicsCompleted} / ${goals.daily_topics_goal}`}
+                            percent={topicsPercent}
+                            color={category.blue}
+                          />
+                          <GoalProgressRow
+                            theme={theme}
+                            label="Materials"
+                            value={`${dailyProgress.materialsOpened} / ${goals.daily_materials_goal}`}
+                            percent={materialsPercent}
+                            color={category.green}
+                          />
+                        </View>
+                      </View>
+                    )}
+
+                    {editingGoals ? null : (
+                      <Text style={[styles.goalStatus, { color: theme.muted }]}>
+                        {goalsOnTrack} of 3 on track
+                      </Text>
+                    )}
                   </View>
-                </Reanimated.View>
+                </AnimatedSection>
+                <AnimatedSection index={4}>
+                  <View style={styles.weekBlock}>
+                    {/* The Rank stat below is the leaderboard's number, so the link
+                        lands exactly where the value came from. */}
+                    <View style={styles.blockHeader}>
+                      <Text style={[styles.blockTitle, { color: theme.muted }]}>
+                        This week
+                      </Text>
 
-                <View style={styles.flex1}>
-                  <Text style={[styles.continueCode, { color: courseType }]}>
-                    {nextCourse?.code || "STUDY"}
-                  </Text>
+                      <Pressable
+                        onPress={() => {
+                          haptics.tap();
+                          router.push("/leaderboard" as any);
+                        }}
+                        hitSlop={10}
+                        style={styles.blockAction}
+                      >
+                        <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                          Leaderboard
+                        </Text>
+                        <MaterialCommunityIcons
+                          name="chevron-right"
+                          size={16}
+                          color={theme.accent}
+                        />
+                      </Pressable>
+                    </View>
 
-                  <Text style={[styles.continueTitle, { color: theme.text }]}>
-                    {nextCourse?.title ||
-                      (hasCourses ? "Topics coming soon" : "Learning starts soon")}
-                  </Text>
+                    {/* Two-by-two rather than four across. In one row each lane was
+                        ~80px wide, which forced the values down to 22px and the labels
+                        down to one word ("Time", "Rank"). Half-width lanes let the
+                        numbers get big and the labels say what they mean. */}
+                    <View style={styles.weekGrid}>
+                        <View style={styles.weekCell}>
+                          <Stat theme={theme} size="major" value={weeklyStats.learningTime} label="Learning time" />
+                        </View>
+                        <View style={styles.weekCell}>
+                          <Stat theme={theme} size="major" value={`${weeklyStats.practiceAccuracy}%`} label="Practice accuracy" />
+                        </View>
+                        <View style={styles.weekCell}>
+                          <Stat theme={theme} size="major" value={String(weeklyStats.xp)} label="XP earned" />
+                        </View>
+                        <View style={styles.weekCell}>
+                          <Stat theme={theme} size="major" value={weeklyStats.rank} label="Leaderboard rank" />
+                        </View>
+                      </View>
+                  </View>
+                </AnimatedSection>
+              </View>
+            }
+          >
+            <ContinueHero
+              {...heroProps}
+              onPress={() =>
+                openCourseWithFolder(nextCourse?.id ? String(nextCourse.id) : "hero", () =>
+                  hasContent && nextTopic
+                    ? openInStudy(nextTopic.course_id, nextTopic.id)
+                    : router.push("/study" as any),
+                )
+              }
+            />
+            <AnimatedSection index={2}>
+              <View style={styles.coursesBlock}>
+                <View style={[styles.blockHeader, styles.coursesHeader]}>
+                  <Text style={[styles.blockTitle, { color: theme.muted }]}>Courses</Text>
 
-                  <Text style={[styles.continueTopic, { color: theme.muted }]}>
-                    {nextTopic?.title ||
-                      (hasCourses
-                        ? "Your course content will appear here."
-                        : "Your courses will appear once setup is ready.")}
-                  </Text>
+                  {assignedCourses.length > 0 ? (
+                    <Pressable
+                      onPress={() => {
+                        haptics.tap();
+                        router.push("/study" as any);
+                      }}
+                      hitSlop={10}
+                      style={styles.blockAction}
+                    >
+                      <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                        See all
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
-              </View>
 
-              <View
-                style={[
-                  styles.track,
-                  styles.heroTrack,
-                  { backgroundColor: withAlpha(courseAccent, 0.2) },
-                ]}
-              >
-                <Reanimated.View
-                  style={[
-                    styles.fill,
-                    {
-                      width: `${continueStats?.progress ?? 0}%`,
-                      backgroundColor: courseAccent,
-                      transitionProperty: "width",
-                      transitionDuration: motionTokens.slow,
-                    },
-                  ]}
-                />
+                {assignedCourses.length === 0 ? (
+                  <Text style={[styles.coursesEmpty, { color: theme.muted }]}>
+                    No courses yet
+                  </Text>
+                ) : (
+                  // Rings, not tiles. This is a dashboard: the question it answers is
+                  // "which course am I furthest behind on", and a sweep answers that at
+                  // a glance. A tile answers "which course is this", which is the study
+                  // library's job — running both meant the two screens showed the same
+                  // object and the dashboard read as a second copy of the library.
+                  //
+                  // It is also about a fifth of the height: the whole catalogue fits in
+                  // roughly 105px, where the tile grid spent that on every two courses.
+                  <CourseRail
+                    theme={theme}
+                    courses={railCourses}
+                    onPressCourse={openInStudy}
+                    wrap={isDesktop}
+                  />
+                )}
               </View>
+            </AnimatedSection>
+            <AnimatedSection index={3}>
+              {/* No "See all". These are simply the newest materials in your
+                  courses, so there is no fuller list of *recommendations* to send
+                  anyone to — the destination would just be the study page they can
+                  already reach from the tab bar. Two rows, and they stand alone. */}
+              {/* `plain`: two rows sitting between two bare blocks did not need a
+                  card and a shadow of their own. Dividers still separate them —
+                  only the surface goes — which leaves Account as the one card on
+                  this screen, and it reads as deliberate rather than as the
+                  default treatment. */}
+              <Rows theme={theme} title="Recommended">
+                {recommendedMaterials.length === 0 ? (
+                  <Row
+                    theme={theme}
+                    icon="file-search-outline"
+                    label={
+                      assignedCourses.length === 0
+                        ? "No recommendations yet"
+                        : "No materials yet"
+                    }
+                    chevron={false}
+                  />
+                ) : (
+                  recommendedMaterials.slice(0, 2).map((item) => (
+                    <Row
+                      key={String(item.id)}
+                      theme={theme}
+                      icon={getMaterialIcon(item.type)}
+                      label={item.title || "Material"}
+                      value={item.courseCode || undefined}
+                      secondary={item.summary_1 || undefined}
+                      onPress={() => openInStudy(item.course_id, item.topic_id)}
+                    />
+                  ))
+                )}
+              </Rows>
+            </AnimatedSection>
+          </SplitPane>
+        ) : (
+          <>
+<ContinueHero
+  {...heroProps}
+  onPress={() =>
+    openCourseWithFolder(nextCourse?.id ? String(nextCourse.id) : "hero", () =>
+      hasContent && nextTopic
+        ? openInStudy(nextTopic.course_id, nextTopic.id)
+        : router.push("/study" as any),
+    )
+  }
+/>
 
-              <View style={[styles.continueCta, { backgroundColor: courseAccent }]}>
-                <Text style={[styles.continueCtaText, { color: courseInk }]}>
-                  Continue learning
-                </Text>
-                <MaterialCommunityIcons
-                  name="arrow-right"
-                  size={20}
-                  color={courseInk}
-                />
-              </View>
-            </Reanimated.View>
-          </Pressable>
+<AnimatedSection index={1}>
+          <View style={styles.coursesBlock}>
+            <View style={[styles.blockHeader, styles.coursesHeader]}>
+              <Text style={[styles.blockTitle, { color: theme.muted }]}>Courses</Text>
+
+              {assignedCourses.length > 0 ? (
+                <Pressable
+                  onPress={() => {
+                    haptics.tap();
+                    router.push("/study" as any);
+                  }}
+                  hitSlop={10}
+                  style={styles.blockAction}
+                >
+                  <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                    See all
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {assignedCourses.length === 0 ? (
+              <Text style={[styles.coursesEmpty, { color: theme.muted }]}>
+                No courses yet
+              </Text>
+            ) : (
+              // Rings, not tiles. This is a dashboard: the question it answers is
+              // "which course am I furthest behind on", and a sweep answers that at
+              // a glance. A tile answers "which course is this", which is the study
+              // library's job — running both meant the two screens showed the same
+              // object and the dashboard read as a second copy of the library.
+              //
+              // It is also about a fifth of the height: the whole catalogue fits in
+              // roughly 105px, where the tile grid spent that on every two courses.
+              <CourseRail
+                theme={theme}
+                courses={railCourses}
+                onPressCourse={openInStudy}
+                wrap={isDesktop}
+              />
+            )}
+          </View>
         </AnimatedSection>
 
-        {/* Off the card. The hero above is the only panel on this screen now,
-            and a second boxed surface directly beneath it made the two compete
-            — this is a ring and three bars, which read fine on the page ground.
-            Same header + trailing action as "This week" further down. */}
-        <AnimatedSection index={1}>
+<AnimatedSection index={2}>
           <View style={styles.goalsBlock}>
             <View style={styles.blockHeader}>
               <Text style={[styles.blockTitle, { color: theme.muted }]}>
@@ -1446,47 +1739,7 @@ export default function Dashboard() {
           </View>
         </AnimatedSection>
 
-        {/* Not a card, and not a list. See the note on CourseRail — five
-            settings-style rows is the wrong shape for "which of my courses am
-            I furthest behind on", which is the only question this section is
-            here to answer. The rail bleeds past the screen gutter, so it reads
-            as something you flick rather than a boxed panel. */}
-        <AnimatedSection index={2}>
-          <View style={styles.coursesBlock}>
-            <View style={[styles.blockHeader, styles.coursesHeader]}>
-              <Text style={[styles.blockTitle, { color: theme.muted }]}>Courses</Text>
-
-              {assignedCourses.length > 0 ? (
-                <Pressable
-                  onPress={() => {
-                    haptics.tap();
-                    router.push("/study" as any);
-                  }}
-                  hitSlop={10}
-                  style={styles.blockAction}
-                >
-                  <Text style={[styles.blockActionText, { color: theme.accent }]}>
-                    See all
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-
-            {assignedCourses.length === 0 ? (
-              <Text style={[styles.coursesEmpty, { color: theme.muted }]}>
-                No courses yet
-              </Text>
-            ) : (
-              <CourseRail
-                theme={theme}
-                courses={railCourses}
-                onPressCourse={openInStudy}
-              />
-            )}
-          </View>
-        </AnimatedSection>
-
-        <AnimatedSection index={3}>
+<AnimatedSection index={3}>
           {/* No "See all". These are simply the newest materials in your
               courses, so there is no fuller list of *recommendations* to send
               anyone to — the destination would just be the study page they can
@@ -1496,9 +1749,9 @@ export default function Dashboard() {
               only the surface goes — which leaves Account as the one card on
               this screen, and it reads as deliberate rather than as the
               default treatment. */}
-          <ListSection theme={theme} title="Recommended" plain>
+          <Rows theme={theme} title="Recommended">
             {recommendedMaterials.length === 0 ? (
-              <ListRow
+              <Row
                 theme={theme}
                 icon="file-search-outline"
                 label={
@@ -1510,7 +1763,7 @@ export default function Dashboard() {
               />
             ) : (
               recommendedMaterials.slice(0, 2).map((item) => (
-                <ListRow
+                <Row
                   key={String(item.id)}
                   theme={theme}
                   icon={getMaterialIcon(item.type)}
@@ -1521,12 +1774,10 @@ export default function Dashboard() {
                 />
               ))
             )}
-          </ListSection>
+          </Rows>
         </AnimatedSection>
 
-        {/* Not a card. Four non-interactive numbers do not need five rounded
-            surfaces and four icon plates — they sit on the page ground. */}
-        <AnimatedSection index={4}>
+<AnimatedSection index={4}>
           <View style={styles.weekBlock}>
             {/* The Rank stat below is the leaderboard's number, so the link
                 lands exactly where the value came from. */}
@@ -1559,50 +1810,41 @@ export default function Dashboard() {
                 down to one word ("Time", "Rank"). Half-width lanes let the
                 numbers get big and the labels say what they mean. */}
             <View style={styles.weekGrid}>
-              <WeekStat
-                theme={theme}
-                label="Learning time"
-                value={weeklyStats.learningTime}
-              />
-              <WeekStat
-                theme={theme}
-                label="Practice accuracy"
-                value={`${weeklyStats.practiceAccuracy}%`}
-              />
-              <WeekStat
-                theme={theme}
-                label="XP earned"
-                value={String(weeklyStats.xp)}
-              />
-              <WeekStat
-                theme={theme}
-                label="Leaderboard rank"
-                value={weeklyStats.rank}
-              />
-            </View>
+                <View style={styles.weekCell}>
+                  <Stat theme={theme} size="major" value={weeklyStats.learningTime} label="Learning time" />
+                </View>
+                <View style={styles.weekCell}>
+                  <Stat theme={theme} size="major" value={`${weeklyStats.practiceAccuracy}%`} label="Practice accuracy" />
+                </View>
+                <View style={styles.weekCell}>
+                  <Stat theme={theme} size="major" value={String(weeklyStats.xp)} label="XP earned" />
+                </View>
+                <View style={styles.weekCell}>
+                  <Stat theme={theme} size="major" value={weeklyStats.rank} label="Leaderboard rank" />
+                </View>
+              </View>
           </View>
         </AnimatedSection>
 
-        {/* Profile is no longer a tab, so it needs a labelled route — not just
-            an avatar. This also gives Settings its first entry point that
-            doesn't route through Profile first. */}
-        <AnimatedSection index={5}>
-          <ListSection theme={theme} title="Account">
-            <ListRow
+<AnimatedSection index={5}>
+          <Rows theme={theme} title="Account">
+            <Row
               theme={theme}
               icon="account-circle-outline"
               label="Profile"
               onPress={() => router.push("/profile" as any)}
             />
 
-            <ListRow
+            <Row
               theme={theme}
               icon="cog-outline"
               label="Settings"
               onPress={() => router.push("/settings" as any)}
             />
-          </ListSection>
+          </Rows>
         </AnimatedSection>
+          </>
+        )}
       </PageHeader>
 
       {loading ? (
@@ -1692,22 +1934,171 @@ function GoalProgressRow({
   );
 }
 
-function WeekStat({
+
+/**
+ * Continue learning.
+ *
+ * A component rather than a render function inside Dashboard, and rather
+ * than markup duplicated across the wide and narrow branches. Two reasons,
+ * one of them not obvious:
+ *
+ *   1. It is the most detailed block on the screen. The rest of Dashboard
+ *      duplicates its sections across the two width branches, which is
+ *      survivable for a heading and a list and is not survivable here.
+ *
+ *   2. As a render function it tripped the React Compiler's purity rule.
+ *      The analyser followed it -> its onPress closure -> openInStudy ->
+ *      Date.now() and called it an impure call during render. The nonce is
+ *      load-bearing (see openInStudy) and the closure really is an event
+ *      handler, so neither could change. Passing onPress in from JSX puts
+ *      the arrow back where every other handler on this screen lives.
+ *      KEEP IT THERE — moving it into heroProps brings the error back,
+ *      because an object literal built during render is not a recognised
+ *      handler position.
+ *
+ * HEIGHT IS A FEATURE HERE
+ * ------------------------
+ * An earlier pass had the folder in a 108px well, a 28px display title on
+ * its own row below, an eyebrow above it and a stacked button — about
+ * 415px, which pushed the course rings off the first screen on a phone.
+ * The rings are the thing a student opens this screen to see. So: no
+ * eyebrow, an 84px well, and the title beside the well rather than under
+ * it. Roughly 235px, and what makes it read as the primary object is
+ * unchanged — the well, the fold, and the fact that it is the one
+ * borderless surface on the screen.
+ *
+ * Nothing here reaches into data: every value arrives as a prop.
+ */
+function ContinueHero({
   theme,
-  label,
-  value,
+  dark,
+  color,
+  icon,
+  title,
+  topic,
+  counts,
+  percent,
+  inlineCta,
+  opening,
+  fillStyle,
+  onPress,
 }: {
   theme: Theme;
-  label: string;
-  value: string;
+  dark: boolean;
+  color: string;
+  icon: IconName;
+  title: string;
+  topic: string;
+  /** "6 of 9 topics", or null when the course has no topics yet. Shown
+   *  beside the percentage only where there is room for it. */
+  counts: string | null;
+  percent: number;
+  /** At or above 1024 the button joins the footer row; below, it stacks. */
+  inlineCta: boolean;
+  opening: boolean;
+  /** The animated fill width. Owned by the screen so it survives re-renders. */
+  fillStyle: React.ComponentProps<typeof Reanimated.View>["style"];
+  onPress: () => void;
 }) {
-  return (
-    <View style={styles.weekCell}>
-      <Text style={[styles.weekValue, { color: theme.text }]} numberOfLines={1}>
-        {value}
-      </Text>
-      <Text style={[styles.weekLabel, { color: theme.muted }]}>{label}</Text>
+  const cta = (
+    <View
+      style={[
+        styles.continueCta,
+        inlineCta ? null : styles.continueCtaBlock,
+        { backgroundColor: theme.accent },
+      ]}
+    >
+      <Text style={[styles.continueCtaText, { color: theme.onAccent }]}>Continue</Text>
+
+      {/* The arrow in its own chip reads as "go" rather than as decoration
+          trailing the word. */}
+      <View style={[styles.continueCtaChip, { backgroundColor: withAlpha(theme.onAccent, 0.2) }]}>
+        <MaterialCommunityIcons name="arrow-right" size={15} color={theme.onAccent} />
+      </View>
     </View>
+  );
+
+  return (
+    <AnimatedSection index={0}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed, hovered }: any) => [
+          styles.continueBlock,
+          {
+            // Neutral. The hue lives in the well and on the dot; the card
+            // itself carries none of it.
+            backgroundColor: theme.card,
+            // ELEVATION EXCEPTION, DELIBERATE, and one step past the course
+            // tiles. They rest at 2 and hover at 3; this rests at 3 and hovers
+            // at 4, which is what lets it read as the primary object with no
+            // border and no colour. Nothing else may reach for level 4.
+            ...elevation(hovered && !pressed ? 4 : 3, theme.shadow),
+            transform: [
+              { translateY: hovered && !pressed ? -2 : 0 },
+              { scale: pressed ? 0.985 : 1 },
+            ],
+            transitionProperty: "transform, box-shadow",
+            transitionDuration: motionTokens.fast,
+          },
+        ]}
+      >
+        <View style={styles.heroTop}>
+          <CourseWell
+            color={color}
+            icon={icon}
+            dark={dark}
+            open={opening}
+            size={84}
+            folderSize={58}
+          />
+
+          {/* Beside the well at every width. Stacking it below was what made
+              the card tall, and it bought nothing: with the button out of
+              this row the title already has about 210px on a phone, which is
+              enough to wrap on whole words. */}
+          <View style={styles.flex1}>
+            <Text style={[styles.heroTitle, { color: theme.text }]}>{title}</Text>
+
+            <View style={styles.heroTopicRow}>
+              {/* The hue as a marker: seven pixels saying which course this
+                  topic belongs to, rather than a panel tinted with it. */}
+              <View style={[styles.heroDot, { backgroundColor: color }]} />
+              <Text style={[styles.heroTopic, { color: theme.text }]}>{topic}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Full bleed to the padding edge. A rule that stops short of the edges
+            reads as a divider between two lists; one that runs the whole width
+            reads as a fold, which is the point. */}
+        <View style={[styles.heroRule, { backgroundColor: theme.border }]} />
+
+        <View style={styles.heroFoot}>
+          <View style={[styles.track, styles.heroTrack, { backgroundColor: theme.soft }]}>
+            <Reanimated.View
+              style={[
+                styles.fill,
+                // Progress toward your own goal, so it takes the brand accent
+                // rather than the course's colour.
+                { backgroundColor: theme.accent },
+                fillStyle,
+              ]}
+            />
+          </View>
+
+          {/* On the bar's line rather than under it: a second row here cost
+              22px to say what four characters say. */}
+          <Text style={[styles.heroPct, { color: theme.muted }]}>
+            {percent}%
+            {inlineCta && counts ? ` · ${counts}` : ""}
+          </Text>
+
+          {inlineCta ? cta : null}
+        </View>
+
+        {inlineCta ? null : cta}
+      </Pressable>
+    </AnimatedSection>
   );
 }
 
@@ -1795,60 +2186,82 @@ const styles = StyleSheet.create({
   continueBlock: {
     padding: spacing.xl,
     borderRadius: radius.xl,
-    borderWidth: StyleSheet.hairlineWidth,
+    // No border, alone on this screen. Every other surface separates with a
+    // hairline; this one separates with depth, which is what makes it read
+    // as sitting above the page rather than drawn on it.
     marginBottom: spacing.xxxl,
   },
-  continueHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.lg,
-  },
-  continueEyebrow: {
-    ...type.caption,
-    letterSpacing: 0.2,
-  },
-  continueCount: {
-    ...type.caption,
-    letterSpacing: 0.2,
-  },
-  continueRow: {
+  heroTop: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.lg,
   },
-  folderWrap: {
-    // Overflow visible so the folder can lift past its box on press.
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  folderGlyph: {
-    position: "absolute",
-    // Sits on the folder's front face rather than centred on the whole shape.
-    bottom: 24,
-    alignSelf: "center",
-  },
-  continueCode: {
-    ...type.micro,
-    letterSpacing: 0.8,
-  },
-  continueTitle: {
+  heroTitle: {
+    // A step above the course tile's bodyLg, not two. Display (28) beside
+    // the well wrapped long LASU course names to three lines and took the
+    // card past 280px on its own.
     ...type.title,
-    marginTop: spacing.xxs,
   },
-  continueTopic: {
+  heroTopicRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  heroDot: {
+    width: 7,
+    height: 7,
+    borderRadius: radius.pill,
+    // Optical centre of the first line rather than its top edge.
+    marginTop: 6,
+  },
+  heroTopic: {
+    // Full contrast, not muted. This is the actual next thing you will read;
+    // at muted it sat below the course name in every sense.
     ...type.body,
-    fontWeight: weight.regular,
-    marginTop: spacing.sm,
+    flex: 1,
+    minWidth: 0,
+  },
+  heroRule: {
+    height: StyleSheet.hairlineWidth,
+    marginTop: spacing.lg,
+    marginHorizontal: -spacing.xl,
+  },
+  heroFoot: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingTop: spacing.md,
+  },
+  heroPct: {
+    ...type.micro,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
   },
   continueCta: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.sm,
+    gap: spacing.md,
     height: 52,
-    borderRadius: radius.md,
-    marginTop: spacing.xl,
+    // Was missing. This rule was written for a full-width block button and
+    // still reads that way — height and radius but no horizontal padding.
+    // Once it moved onto the hero row it sized to its label exactly, so the
+    // pill hugged the text. Harmless in the stretched variant, required in
+    // the inline one.
+    paddingHorizontal: spacing.xl,
+    borderRadius: radius.lg,
+  },
+  // The sub-1024 variant: out of the row, under the track, full width.
+  continueCtaBlock: {
+    alignSelf: "stretch",
+    marginTop: spacing.lg + 2,
+  },
+  continueCtaChip: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
   },
   continueCtaText: {
     ...type.bodyLg,
@@ -1867,7 +2280,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   heroTrack: {
-    marginTop: spacing.xl,
+    // Thicker than the goal rows' 6, and it takes the slack on its row so
+    // the percentage and the button sit at the trailing edge.
+    height: 8,
+    flex: 1,
   },
   goalTrack: {
     marginTop: spacing.sm,
@@ -1982,15 +2398,6 @@ const styles = StyleSheet.create({
     // Fixed half-width rather than flex: wrapping needs a resolved basis, and
     // flex: 1 would keep all four on one line.
     width: "50%",
-  },
-  weekValue: {
-    ...type.display,
-  },
-  weekLabel: {
-    ...type.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-    marginTop: spacing.xxs,
   },
 
   loadingOverlay: {

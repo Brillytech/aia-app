@@ -31,9 +31,11 @@ import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
-import { FolderIcon } from "../../ui/FolderIcon";
+import { FOLDER_OPEN_MS } from "../../ui/CourseFolder";
+import { CourseTile, courseTileLayout } from "../../ui/CourseTile";
+import { SkeletonBar, SkeletonSlot } from "../../ui/Skeleton";
 import { subjectColor, subjectIcon } from "../../ui/subject";
-import { elevation, layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
+import { layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
   id: string;
   code: string;
@@ -758,6 +760,11 @@ export default function Study() {
   const [hardReviewMode, setHardReviewMode] = useState(false);
   const [cardsView, setCardsView] = useState<"player" | "browser">("player");
   const [cardSearch, setCardSearch] = useState("");
+  // Which course tile is mid-open. Pressing sets it, and navigation waits for
+  // the hinge to settle — a tap holds `pressed` for about 100ms, so an
+  // animation bound to it would be cut off at roughly a fifth of the way
+  // through and read as a twitch.
+  const [openingCourseId, setOpeningCourseId] = useState<string | null>(null);
   const [materialViewer, setMaterialViewer] = useState<{
     visible: boolean;
     material: Material | null;
@@ -774,7 +781,6 @@ export default function Study() {
   // header animates once at a threshold instead of re-rendering every frame.
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
 
-  const pulse = useRef(new Animated.Value(1)).current;
 
   // Every second on this screen counts, whether you are reading a PDF, sitting
   // on the course list, or halfway through a flashcard deck. The tracker banks
@@ -786,7 +792,6 @@ export default function Study() {
     title: "",
     message: "",
   });
-  const surface = theme.card;
   const selectedCourseTheme = selectedCourse
     ? getCourseTheme(selectedCourse)
     : getCourseTheme("", "");
@@ -807,22 +812,6 @@ export default function Study() {
   const currentQuickCard = quickDeck[quickCardIndex];
   useEffect(() => {
     loadCourses();
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1.018,
-          duration: 1900,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1900,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    animation.start();
-    return () => animation.stop();
   }, []);
 
   // Deep links from the dashboard — course rows, "Continue learning" and the
@@ -1628,8 +1617,8 @@ export default function Study() {
               </Text>
 
               {courseCode(selectedCourse) ? (
-                <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
-                  <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
+                <View style={[styles.skelBadge, { backgroundColor: theme.soft }]}>
+                  <Text style={[styles.skelBadgeText, { color: theme.muted }]} numberOfLines={1}>
                     {courseCode(selectedCourse)}
                   </Text>
                 </View>
@@ -1736,28 +1725,7 @@ export default function Study() {
     return (
       <>
         {loadingCourses ? (
-          <View style={styles.skeletonList}>
-            {[1, 2, 3].map((item) => (
-              <View
-                key={item}
-                style={[
-                  styles.skeletonCard,
-                  { backgroundColor: surface, borderColor: theme.border },
-                ]}
-              >
-                <View style={[styles.skeletonIcon, { backgroundColor: theme.soft }]} />
-                <View style={{ flex: 1 }}>
-                  <View style={[styles.skeletonLine, { backgroundColor: theme.soft }]} />
-                  <View
-                    style={[
-                      styles.skeletonLineSmall,
-                      { backgroundColor: theme.soft },
-                    ]}
-                  />
-                </View>
-              </View>
-            ))}
-          </View>
+          renderCourseSkeleton(mode)
         ) : filteredCourses.length === 0 ? (
           <EmptyState
             theme={theme}
@@ -1766,7 +1734,7 @@ export default function Study() {
             text="No course matches your profile yet. Please check your department and level, then try again."
           />
         ) : (
-          <View style={mode === "rail" ? styles.courseList : styles.courseGrid}>
+          <View style={mode === "rail" ? styles.courseList : courseTileLayout.grid}>
             {filteredCourses.map((course) => {
               const courseTheme = getCourseTheme(course);
               const code = courseCode(course);
@@ -1803,102 +1771,31 @@ export default function Study() {
               return (
                 <View
                   key={course.id}
-                  style={[styles.courseCell, wide ? styles.courseCellWide : styles.courseCellFull]}
+                  style={[courseTileLayout.cell, wide ? courseTileLayout.cellThird : courseTileLayout.cellFull]}
                 >
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={[code, course.title].filter(Boolean).join(" ")}
-                    onPress={() => openCourse(course)}
-                    style={({ pressed, hovered }: any) => [
-                      styles.courseTile,
-                      {
-                        backgroundColor: theme.card,
-                        borderColor: theme.border,
-                        ...elevation(hovered && !pressed ? 3 : 2, theme.shadow),
-                        transform: [
-                          { translateY: hovered && !pressed ? -2 : 0 },
-                          { scale: pressed ? 0.985 : 1 },
-                        ],
-                        transitionProperty: "transform, box-shadow",
-                        transitionDuration: motionTokens.fast,
-                      },
-                    ]}
-                  >
-                    {({ pressed }: any) => (
-                      <>
-                        {/* The folder from the dashboard's Continue learning
-                            card, at tile scale. It is the only thing carrying
-                            the course hue — the tile itself stays neutral.
-
-                            `pulse` already existed at the top of this file:
-                            a 1 -> 1.018 loop on the native driver that was
-                            started, looped forever and read by nothing. This
-                            is its consumer. */}
-                        {/* Two wrappers, not one. The pulse writes transform
-                            every frame; a CSS transition on the same property
-                            would try to interpolate toward each of those
-                            frames and fight it. So the loop owns the outer
-                            transform and the press-driven tilt owns the inner
-                            one, and neither touches the other's property. */}
-                        <Animated.View
-                          style={[styles.courseFolder, { transform: [{ scale: pulse }] }]}
-                        >
-                          <View
-                            style={{
-                              transform: [
-                                { translateY: pressed ? -4 : 0 },
-                                { rotate: pressed ? "-5deg" : "-3deg" },
-                              ],
-                              transitionProperty: "transform",
-                              transitionDuration: motionTokens.base,
-                            }}
-                          >
-                          <FolderIcon color={courseTheme.color} size={52} open={pressed} />
-
-                          {/* The course's own admin-set glyph, on the folder's
-                              front face rather than centred on the whole
-                              shape — same placement dashboard uses. */}
-                          <View style={[styles.courseFolderGlyph, { bottom: pressed ? 6 : 9 }]}>
-                            <MaterialCommunityIcons
-                              name={courseTheme.icon}
-                              size={15}
-                              color={theme.onAccent}
-                            />
-                          </View>
-                          </View>
-                        </Animated.View>
-
-                        <View style={styles.courseTileText}>
-                          <View style={styles.courseTileTop}>
-                            {/* No numberOfLines: the full name always shows and
-                                wraps as far as it needs. The reserved second
-                                line is gone — that was 48px every tile paid
-                                whether it used them or not. */}
-                            <Text style={[styles.courseTileName, { color: theme.text }]}>
-                              {course.title}
-                            </Text>
-
-                            {/* Absent codes drop the badge entirely rather than
-                                rendering an empty pill. courseCode() is the
-                                same test the sort uses. */}
-                            {code ? (
-                              <View style={[styles.courseBadge, { backgroundColor: theme.soft }]}>
-                                <Text style={[styles.courseBadgeText, { color: theme.muted }]} numberOfLines={1}>
-                                  {code}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-
-                          <Text style={[styles.courseMeta, { color: theme.muted }]} numberOfLines={1}>
-                            {course.department && course.level
-                              ? `${course.department} • ${course.level}`
-                              : "Not assigned"}
-                          </Text>
-                        </View>
-                      </>
-                    )}
-                  </Pressable>
+                  <CourseTile
+                    theme={theme}
+                    title={course.title}
+                    code={code}
+                    meta={
+                      course.department && course.level
+                        ? `${course.department} • ${course.level}`
+                        : "Not assigned"
+                    }
+                    color={courseTheme.color}
+                    icon={courseTheme.icon}
+                    opening={openingCourseId === course.id}
+                    onPress={() => {
+                      if (openingCourseId) return;
+                      setOpeningCourseId(course.id);
+                      // The opening IS the transition. Navigating immediately
+                      // would show the first frame and nothing else.
+                      setTimeout(() => {
+                        setOpeningCourseId(null);
+                        openCourse(course);
+                      }, FOLDER_OPEN_MS);
+                    }}
+                  />
                 </View>
               );
             })}
@@ -1907,17 +1804,163 @@ export default function Study() {
       </>
     );
   }
-  function renderTopicList() {
-    if (loadingTopics) {
+  /**
+   * Loading placeholders that mirror the row each list actually renders.
+   *
+   * Widths vary per row so a block of them does not read as a printed pattern,
+   * and every bar shares one driver (see ui/Skeleton.tsx) so the whole screen
+   * sweeps as a single surface.
+   */
+  function renderTopicSkeleton() {
+    const rows = [
+      { title: "68%", desc: "44%" },
+      { title: "52%", desc: "38%" },
+      { title: "74%", desc: "50%" },
+      { title: "58%", desc: "34%" },
+      { title: "64%", desc: "46%" },
+    ];
+
+    return (
+      <View style={[styles.toc, { borderTopColor: theme.border }]}>
+        {rows.map((row, index) => (
+          <View
+            key={index}
+            style={[styles.tocRow, { borderBottomColor: theme.border }]}
+          >
+            {/* The real path rail, in neutral. Drawing it is what makes this a
+                preview of the contents rather than a generic loading block. */}
+            <View style={styles.tocRail}>
+              <View
+                style={[
+                  styles.tocLine,
+                  {
+                    backgroundColor: theme.border,
+                    top: index === 0 ? "50%" : 0,
+                    bottom: index === rows.length - 1 ? "50%" : 0,
+                  },
+                ]}
+              />
+              <View style={[styles.skelNode, { backgroundColor: theme.bg }]}>
+                <SkeletonBar theme={theme} width={11} height={12} />
+              </View>
+            </View>
+
+            <View style={styles.tocText}>
+              <SkeletonBar theme={theme} width={row.title} height={13} />
+              <SkeletonBar theme={theme} width={row.desc} height={10} />
+            </View>
+
+            <SkeletonBar theme={theme} width={96} height={28} rounded={14} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function renderCourseSkeleton(mode: "tiles" | "rail") {
+    const rows = ["70%", "58%", "76%", "62%", "68%", "54%"];
+
+    if (mode === "rail") {
       return (
-        <LoadingCard
-          theme={theme}
-          color={selectedCourseTheme.color}
-          title="Loading topics..."
-          text="Preparing the course structure."
-        />
+        <View style={styles.courseList}>
+          {rows.slice(0, 5).map((width, index) => (
+            <View key={index} style={styles.courseRow}>
+              <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
+              <SkeletonBar theme={theme} width={width} height={13} />
+            </View>
+          ))}
+        </View>
       );
     }
+
+    return (
+      <View style={courseTileLayout.grid}>
+        {rows.map((width, index) => (
+          <View
+            key={index}
+            style={[courseTileLayout.cell, wide ? courseTileLayout.cellThird : courseTileLayout.cellFull]}
+          >
+            <View
+              style={[
+                courseTileLayout.tile,
+                { backgroundColor: theme.card, borderColor: theme.border },
+              ]}
+            >
+              {/* Matches the folder's real box, not the 58px round plate the
+                  previous skeleton drew for a tile that no longer exists. */}
+              <SkeletonBar theme={theme} width={52} height={45} rounded={10} />
+
+              <View style={styles.skelTileText}>
+                <View style={styles.skelTileTop}>
+                  <SkeletonBar theme={theme} width={width} height={14} />
+                  <SkeletonBar theme={theme} width={54} height={16} />
+                </View>
+                <SkeletonBar theme={theme} width="46%" height={11} style={styles.skelGap} />
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function renderMaterialSkeleton() {
+    const rows = [
+      { title: "72%", tag: "38%" },
+      { title: "58%", tag: "30%" },
+      { title: "80%", tag: "34%" },
+    ];
+
+    return (
+      <View style={styles.list}>
+        {rows.map((row, index) => (
+          <View
+            key={index}
+            style={[
+              styles.materialCard,
+              styles.skelCard,
+              { backgroundColor: theme.card, borderColor: theme.border },
+            ]}
+          >
+            <SkeletonBar theme={theme} width={40} height={40} rounded={14} />
+
+            <View style={styles.flex1}>
+              <SkeletonBar theme={theme} width={row.title} height={15} />
+              <SkeletonBar theme={theme} width={row.tag} height={18} style={styles.skelGap} />
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function renderQuestionSkeleton() {
+    return (
+      <View>
+        <View style={styles.skelQuestionHead}>
+          <SkeletonBar theme={theme} width={84} height={12} />
+          <SkeletonBar theme={theme} width={120} height={6} />
+        </View>
+
+        <SkeletonBar theme={theme} width="94%" height={16} />
+        <SkeletonBar theme={theme} width="68%" height={16} style={styles.skelGap} />
+
+        {/* Outlined rather than filled. Four solid 52pt blocks read as a wall
+            of grey; an empty bordered slot reads as an answer waiting to
+            arrive, which is also closer to the real option row. */}
+        <View style={styles.skelOptions}>
+          {[0, 1, 2, 3].map((index) => (
+            <SkeletonSlot key={index} theme={theme} height={52}>
+              <SkeletonBar theme={theme} width={index % 2 === 0 ? "58%" : "44%"} height={12} />
+            </SkeletonSlot>
+          ))}
+        </View>
+      </View>
+    );
+  }
+
+  function renderTopicList() {
+    if (loadingTopics) return renderTopicSkeleton();
     if (topics.length === 0) {
       return (
         <EmptyState
@@ -2089,16 +2132,7 @@ export default function Study() {
     );
   }
   function renderQuestionMode() {
-    if (loadingContent) {
-      return (
-        <LoadingCard
-          theme={theme}
-          color={selectedCourseTheme.color}
-          title="Fetching questions..."
-          text="Preparing your study questions."
-        />
-      );
-    }
+    if (loadingContent) return renderQuestionSkeleton();
     if (questions.length === 0 || !currentQuestion) {
       return (
         <EmptyState
@@ -2298,16 +2332,7 @@ export default function Study() {
     );
   }
   function renderMaterials() {
-    if (loadingContent) {
-      return (
-        <LoadingCard
-          theme={theme}
-          color={selectedCourseTheme.color}
-          title="Loading materials..."
-          text="Fetching files, notes and video links."
-        />
-      );
-    }
+    if (loadingContent) return renderMaterialSkeleton();
     if (materials.length === 0) {
       return (
         <EmptyState
@@ -2449,7 +2474,6 @@ export default function Study() {
    * This is the first and only reader of quickCardRatings.
    */
   function renderCardBrowser() {
-    const tone = selectedCourseTheme.color;
     const query = cardSearch.trim().toLowerCase();
 
     const visible = query
@@ -2996,25 +3020,6 @@ function SmallStat({
     </View>
   );
 }
-function LoadingCard({
-  theme,
-  color,
-  title,
-  text,
-}: {
-  theme: any;
-  color: string;
-  title: string;
-  text: string;
-}) {
-  return (
-    <View style={[styles.emptyCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
-      <ActivityIndicator size="small" color={color} />
-      <Text style={[styles.emptyTitle, { color: theme.text }]}>{title}</Text>
-      <Text style={[styles.emptyText, { color: theme.muted }]}>{text}</Text>
-    </View>
-  );
-}
 function EmptyState({
   theme,
   icon,
@@ -3126,30 +3131,24 @@ const styles = StyleSheet.create({
     // On the folder's front face, not centred on the whole shape.
     alignSelf: "center",
   },
-  courseTileText: {
+  skelTileText: {
     flex: 1,
     minWidth: 0,
   },
-  courseTileTop: {
+  skelTileTop: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: spacing.md,
   },
-  courseBadge: {
+  skelBadge: {
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xxs,
     borderRadius: radius.pill,
   },
-  courseBadgeText: {
+  skelBadgeText: {
     ...typeScale.micro,
     letterSpacing: 0.5,
-  },
-  courseTileName: {
-    flex: 1,
-    minWidth: 0,
-    ...typeScale.bodyLg,
-    fontWeight: weight.bold,
   },
   // Compact row, rail only.
   courseRowName: {
@@ -3216,12 +3215,6 @@ const styles = StyleSheet.create({
     fontWeight: weight.semi,
     marginTop: spacing.xxs,
   },
-  courseMeta: {
-    ...typeScale.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-    marginTop: spacing.xxs,
-  },
   smallStat: {
     flex: 1,
     borderRadius: 18,
@@ -3257,6 +3250,32 @@ const styles = StyleSheet.create({
     fontWeight: weight.semi,
   },
   // Table of contents: rules, not surfaces.
+  // --- loading skeletons -----------------------------------------------
+  // The bar sits on the page ground so the path rail passes behind it, the
+  // same trick the real number uses.
+  skelNode: {
+    paddingVertical: spacing.xxs,
+  },
+  skelGap: {
+    marginTop: spacing.sm,
+  },
+  skelCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.md,
+  },
+  skelQuestionHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  skelOptions: {
+    marginTop: spacing.lg,
+    gap: spacing.md,
+  },
   toc: {
     borderTopWidth: StyleSheet.hairlineWidth,
   },
@@ -3710,33 +3729,6 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 13,
     fontWeight: "900",
-  },
-  skeletonList: {
-    gap: 14,
-  },
-  skeletonCard: {
-    borderWidth: 1,
-    borderRadius: 28,
-    padding: 16,
-    flexDirection: "row",
-    gap: 14,
-  },
-  skeletonIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 21,
-  },
-  skeletonLine: {
-    height: 18,
-    borderRadius: 999,
-    width: "80%",
-    marginTop: 6,
-  },
-  skeletonLineSmall: {
-    height: 14,
-    borderRadius: 999,
-    width: "54%",
-    marginTop: 10,
   },
   emptyCard: {
     borderRadius: 30,

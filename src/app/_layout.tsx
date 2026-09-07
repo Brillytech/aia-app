@@ -32,7 +32,6 @@ const COLUMN_MAX_WIDTH = 480;
  */
 export default function RootLayout() {
   const { theme } = useThemeMode();
-  const dark = theme.mode === "dark";
 
   // Above 1024 the column stops being the design and starts being a cage: the
   // sidebar and a two-pane screen cannot live inside 480px. The letterboxing

@@ -41,6 +41,17 @@ const { count, size, warnings } = await generateSW({
     // The only icon font the app imports. Without it every glyph in the UI
     // renders as a blank box.
     "assets/**/MaterialCommunityIcons.*.ttf",
+    // KaTeX, for theory questions. The JS chunks are already covered by the
+    // _expo glob above; these two are not, because they are served from
+    // public/ rather than emitted by Metro (see scripts/sync-katex.js).
+    // Without them an offline theory question renders its maths in a system
+    // font at the wrong metrics — which is the failure bundling KaTeX was
+    // supposed to prevent in the first place.
+    "katex/katex.min.css",
+    // woff2 only, ~260KB. The .woff copies stay out: every browser that can
+    // usefully run a service worker takes woff2, and precaching both would
+    // double the cost for a fallback that will not be reached.
+    "katex/fonts/*.woff2",
   ],
   // Workbox ignores **/node_modules/** by default, and Expo emits the icon
   // fonts to assets/node_modules/@expo/vector-icons/... — a real build output

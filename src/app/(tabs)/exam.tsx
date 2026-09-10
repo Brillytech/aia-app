@@ -36,11 +36,11 @@ import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
+import { getGrade, HeadlineRow, HeadlineStat, ScoreHero } from "../../ui/Score";
 import { Stepper } from "../../ui/Stepper";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import {
   layout,
-  radius,
   spacing,
   type as typeScale,
   weight,
@@ -187,12 +187,6 @@ function getQuestionTopicTitle(q: Question) {
   );
 }
 
-function getGrade(score: number) {
-  if (score >= 70) return { label: "Excellent", color: "#22C55E" };
-  if (score >= 60) return { label: "Good", color: "#3B82F6" };
-  if (score >= 50) return { label: "Fair", color: "#F97316" };
-  return { label: "Needs Improvement", color: "#EF4444" };
-}
 
 function isUuid(value?: string | null) {
   if (!value) return false;
@@ -1397,46 +1391,22 @@ https://lasuscholar.com`;
             {/* Course identity first and quietly, then the score alone. The
                 old hero boxed all of it together, so the percentage competed
                 with an icon plate, a kicker and a share button. */}
-            <View style={styles.resultCourse}>
-              <Text style={[styles.resultCode, { color: selectedCourseTheme.color }]}>
-                {selectedCourse?.code}
-              </Text>
-              <Text style={[styles.resultSub, { color: muted }]}>
-                {selectedCourse?.title}
-              </Text>
-            </View>
+            <ScoreHero
+              theme={theme}
+              dark={isDark}
+              eyebrow={selectedCourse?.code}
+              eyebrowColor={selectedCourseTheme.color}
+              subtitle={selectedCourse?.title}
+              percent={scorePercent}
+              label="Final score"
+              grade={grade}
+            />
 
-            <View style={styles.scoreHero}>
-              <Text style={[styles.scorePercent, { color: grade.color }]}>
-                {scorePercent}%
-              </Text>
-              <Text style={[styles.scoreLabel, { color: muted }]}>Final score</Text>
-
-              <View
-                style={[
-                  styles.gradePillBig,
-                  { backgroundColor: withAlpha(grade.color, isDark ? 0.24 : 0.16) },
-                ]}
-              >
-                <MaterialCommunityIcons name="medal-outline" size={18} color={grade.color} />
-                <Text style={[styles.gradeText, { color: grade.color }]}>{grade.label}</Text>
-              </View>
-
-              <View style={[styles.resultTrack, { backgroundColor: theme.soft }]}>
-                <View
-                  style={[
-                    styles.resultFill,
-                    { width: `${scorePercent}%`, backgroundColor: grade.color },
-                  ]}
-                />
-              </View>
-            </View>
-
-            <View style={styles.headlineRow}>
+            <HeadlineRow>
               <HeadlineStat theme={theme} label="Correct" value={String(correct)} color={theme.success} />
               <HeadlineStat theme={theme} label="Wrong" value={String(wrong)} color={theme.error} />
               <HeadlineStat theme={theme} label="Time" value={formatTime(timeUsed)} color={theme.info} />
-            </View>
+            </HeadlineRow>
 
             <ListSection theme={theme} title="Summary" inset={dividerInset.none}>
               <ListRow theme={theme} label="Unanswered" value={String(unanswered)} chevron={false} />
@@ -1613,26 +1583,6 @@ function ExamPrompt({
   );
 }
 
-function HeadlineStat({
-  theme,
-  label,
-  value,
-  color,
-}: {
-  theme: Theme;
-  label: string;
-  value: string;
-  color: string;
-}) {
-  return (
-    <View style={styles.flex1}>
-      <Text style={[styles.headlineValue, { color }]} numberOfLines={1}>
-        {value}
-      </Text>
-      <Text style={[styles.headlineLabel, { color: theme.muted }]}>{label}</Text>
-    </View>
-  );
-}
 
 function InfoMini({ label, value, theme }: any) {
   return (
@@ -1930,26 +1880,8 @@ const styles = StyleSheet.create({
   },
 
   flex1: { flex: 1 },
-  resultCourse: { alignItems: "center", marginBottom: spacing.sm },
-  resultCode: { ...typeScale.micro, letterSpacing: 0.8 },
-  scoreHero: { alignItems: "center", paddingBottom: spacing.xxxl },
-  headlineRow: {
-    flexDirection: "row",
-    gap: spacing.md,
-    marginTop: spacing.xl,
-    // ListSection supplies its own bottom margin but not a top one, so any
-    // block sitting directly above a section has to space itself — this row
-    // had none and collided with the Summary heading beneath it.
-    marginBottom: spacing.xxxl,
-    paddingHorizontal: spacing.xs,
-  },
-  headlineValue: { ...typeScale.title },
-  headlineLabel: {
-    ...typeScale.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-    marginTop: spacing.xxs,
-  },
+
+
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2449,12 +2381,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  resultSub: {
-    ...typeScale.body,
-    fontWeight: weight.regular,
-    marginTop: spacing.xxs,
-    textAlign: "center",
-  },
 
   scoreSection: {
     borderTopWidth: 1,
@@ -2464,9 +2390,6 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
 
-  scorePercent: {
-    ...typeScale.mega,
-  },
 
   gradePill: {
     paddingHorizontal: 14,
@@ -2474,10 +2397,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
 
-  gradeText: {
-    fontSize: 12,
-    fontWeight: "900",
-  },
 
   resultMetricGrid: {
     flexDirection: "row",
@@ -2529,35 +2448,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
-  scoreLabel: {
-    ...typeScale.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-    marginTop: spacing.xs,
-  },
 
-  gradePillBig: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    marginTop: spacing.lg,
-  },
 
-  resultTrack: {
-    height: 6,
-    borderRadius: radius.pill,
-    overflow: "hidden",
-    alignSelf: "stretch",
-    marginTop: spacing.xl,
-  },
 
-  resultFill: {
-    height: "100%",
-    borderRadius: 999,
-  },
 
   resultMetricGridPremium: {
     flexDirection: "row",

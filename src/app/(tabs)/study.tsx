@@ -30,6 +30,10 @@ import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
+import { Segmented } from "../../ui/Segmented";
+import { marksFor, ratingFraction, scoreTopic, type ScoredItem, type SelfCheck } from "../../theoryScore";
+import { TheoryQuestion as TheoryQuestionView } from "../../ui/TheoryQuestion";
+import { TheoryResults, type TheoryResultRow } from "../../ui/TheoryResults";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
 import { FOLDER_OPEN_MS } from "../../ui/CourseFolder";
 import { CourseTile, courseTileLayout } from "../../ui/CourseTile";
@@ -157,6 +161,56 @@ const STUDY_SPLIT = 1200;
 
 /** Course rail width once a course is open. */
 const COURSE_RAIL = 320;
+
+/**
+ * A theory question, as this screen uses it.
+ *
+ * Deliberately not the raw row. THIS ADAPTER IS THE ONLY PLACE THAT NAMES
+ * theory_questions COLUMNS — everything below reads these fields instead, so
+ * when the real schema turns out to differ there is exactly one function to
+ * correct rather than a screen's worth of property accesses.
+ *
+ * The names below are the ones the table was described with; the table is
+ * readable only to an authenticated role, so they could not be confirmed
+ * against PostgREST before this was written. `describeRow` prints what
+ * actually arrived, once, in dev.
+ */
+type TheoryQuestion = {
+  id: string;
+  html: string | null;
+  text: string | null;
+  answerHtml: string | null;
+  answerText: string | null;
+  marks: number | null;
+  difficulty: string | null;
+};
+
+/** What the self-check buttons said, for the results breakdown. */
+const RATING_LABEL: Record<SelfCheck, string> = {
+  missed: "Missed it",
+  partly: "Partly",
+  got: "Got it",
+};
+
+function adaptTheory(rows: any[]): TheoryQuestion[] {
+  return rows.map((row) => ({
+    id: String(row.id),
+    html: row.question_html ?? null,
+    text: row.question_text ?? null,
+    answerHtml: row.answer_html ?? null,
+    answerText: row.answer_text ?? null,
+    marks: typeof row.marks === "number" ? row.marks : null,
+    difficulty: row.difficulty ? String(row.difficulty) : null,
+  }));
+}
+
+/** Prints the real column names the first time a row arrives, in dev only. */
+let describedTheory = false;
+function describeRow(row: any) {
+  if (!__DEV__ || describedTheory || !row) return;
+  describedTheory = true;
+  console.log("[theory_questions] columns:", Object.keys(row).join(", "));
+}
 
 const tabs = ["Topics", "Materials", "Questions", "Cards"];
 
@@ -751,6 +805,22 @@ export default function Study() {
   const [activeTab, setActiveTab] = useState("Topics");
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
+  const [theory, setTheory] = useState<TheoryQuestion[]>([]);
+  const [theoryIndex, setTheoryIndex] = useState(0);
+  // Per question, and reset on every move: a revealed answer that stayed
+  // revealed as you paged would give the next one away before you read it.
+  const [answerShown, setAnswerShown] = useState(false);
+  const [questionFormat, setQuestionFormat] = useState<"mcq" | "theory">("mcq");
+  // Which way the last move went, so the turn animation knows which side to
+  // come from. Null until the first move — which is also what gives the very
+  // first question a plain swap instead of a slide held open waiting for the
+  // KaTeX chunk to download.
+  const [theoryDir, setTheoryDir] = useState<"next" | "prev" | null>(null);
+  // Self-assessment, not grading. IN-SESSION ONLY — lost on reload, exactly
+  // like quickCardRatings, and tracked with it as one persistence follow-up
+  // rather than two separate ones.
+  const [theoryRatings, setTheoryRatings] = useState<Record<string, SelfCheck>>({});
+  const [theoryDone, setTheoryDone] = useState(false);
   const [quickCardIndex, setQuickCardIndex] = useState(0);
   const [showBack, setShowBack] = useState(false);
   const [quickCardRatings, setQuickCardRatings] = useState<Record<string, FlashRating>>({});
@@ -1072,6 +1142,13 @@ export default function Study() {
     setActiveTab("Questions");
     setSelectedAnswers({});
     setQuestionIndex(0);
+    setTheory([]);
+    setTheoryIndex(0);
+    setAnswerShown(false);
+    setTheoryDir(null);
+    setTheoryRatings({});
+    setTheoryDone(false);
+    setQuestionFormat("mcq");
     resetQuickCards();
     if (!isUuid(course.id) || !isUuid(topic.id)) {
       setQuestions(fallbackQuestions);
@@ -1079,7 +1156,11 @@ export default function Study() {
       setLoadingContent(false);
       return;
     }
-    const [{ data: qs, error: qsError }, { data: mats, error: matsError }] =
+    const [
+      { data: qs, error: qsError },
+      { data: mats, error: matsError },
+      { data: theoryRows, error: theoryError },
+    ] =
       await Promise.all([
         supabase
           .from("questions")
@@ -1093,11 +1174,22 @@ export default function Study() {
           .eq("course_id", course.id)
           .eq("topic_id", topic.id)
           .order("created_at", { ascending: false }),
+        // Same two keys as the other two, so this is one more entry in the
+        // existing round trip rather than a second load path.
+        supabase
+          .from("theory_questions")
+          .select("*")
+          .eq("course_id", course.id)
+          .eq("topic_id", topic.id)
+          .order("created_at", { ascending: true }),
       ]);
     if (qsError) console.log("QUESTIONS LOAD ERROR:", qsError.message);
     if (matsError) console.log("MATERIALS LOAD ERROR:", matsError.message);
+    if (theoryError) console.log("THEORY LOAD ERROR:", theoryError.message);
     setQuestions(qs && qs.length > 0 ? qs : []);
     setMaterials(mats && mats.length > 0 ? mats : []);
+    describeRow(theoryRows?.[0]);
+    setTheory(theoryRows ? adaptTheory(theoryRows) : []);
     setLoadingContent(false);
   }
   function resetQuickCards() {
@@ -2131,6 +2223,183 @@ export default function Study() {
       </ScrollView>
     );
   }
+  /**
+   * Multiple choice and theory are the same tab, split by format.
+   *
+   * Not a fifth pill in the tab row: four already scroll horizontally at
+   * 390px, and a fifth would push Cards off-screen — making an existing
+   * feature harder to find in order to surface a new one. The split is about
+   * what shape the answer takes, which a student should not have to decide
+   * before opening the tab, and which is what a segmented control is for.
+   */
+  function renderFormatSwitch() {
+    // Only when there is genuinely a choice. A topic with just one kind
+    // shows no control at all, so nothing about Questions changes for the
+    // topics that have no theory content.
+    if (theory.length === 0 || questions.length === 0) return null;
+
+    return (
+      <Segmented
+        theme={theme}
+        value={questionFormat}
+        onChange={setQuestionFormat}
+        stretch
+        options={[
+          { value: "mcq", label: "Multiple choice" },
+          { value: "theory", label: "Theory" },
+        ] as const}
+      />
+    );
+  }
+
+  /**
+   * What the topic's theory questions came to.
+   *
+   * Grid questions will concatenate into this array with `source: "auto"`
+   * and a cells-correct fraction — `scoreTopic` needs no change to take
+   * them, which is the whole reason the fraction is computed by the caller
+   * rather than inside it.
+   */
+  function theoryItems(): ScoredItem[] {
+    return theory.map((item) => ({
+      id: item.id,
+      marks: item.marks,
+      fraction: ratingFraction(theoryRatings[item.id] ?? null),
+      source: "self" as const,
+    }));
+  }
+
+  /** One row per question for the results breakdown. */
+  function theoryRows(): TheoryResultRow[] {
+    return theory.map((item, position) => {
+      const rating = theoryRatings[item.id] ?? null;
+      const fraction = ratingFraction(rating);
+      const marks = marksFor(item);
+
+      return {
+        id: item.id,
+        number: position + 1,
+        marks,
+        earned: fraction === null ? 0 : marks * fraction,
+        fraction,
+        source: "self" as const,
+        detail: rating ? RATING_LABEL[rating] : "Not attempted",
+        tone:
+          rating === "got"
+            ? theme.success
+            : rating === "partly"
+              ? theme.warning
+              : rating === "missed"
+                ? theme.error
+                : theme.muted,
+      };
+    });
+  }
+
+  function finishTheory() {
+    const result = scoreTopic(theoryItems());
+    setTheoryDone(true);
+
+    // Progress only. Deliberately NOT xp_events: the exam chain earns XP
+    // against auto-graded truth, and most of this number is the student's
+    // own rating of themselves. Putting self-declared XP into the same pot
+    // the leaderboard reads from would make that board mean nothing, and it
+    // is far harder to claw back later than to add.
+    requestAnimationFrame(() => {
+      updateStudyProgress({ progressPercent: result.percent });
+    });
+  }
+
+  function goToTheory(next: number, dir: "next" | "prev") {
+    setTheoryIndex(next);
+    // A revealed answer that stayed revealed as you paged would give the
+    // next one away before you had read it.
+    setAnswerShown(false);
+    setTheoryDir(dir);
+  }
+
+  function renderQuestions() {
+    if (loadingContent) return renderQuestionSkeleton();
+
+    // Theory when it is chosen, and also when it is all there is — a topic
+    // with only theory must not fall into the MCQ empty state.
+    const onlyTheory = theory.length > 0 && questions.length === 0;
+    if (onlyTheory || (questionFormat === "theory" && theory.length > 0)) {
+      return renderTheoryMode();
+    }
+
+    return renderQuestionMode();
+  }
+
+  function renderTheoryMode() {
+    const current = theory[Math.min(theoryIndex, theory.length - 1)];
+    if (!current) {
+      return (
+        <EmptyState
+          theme={theme}
+          icon="text-box-outline"
+          title="No theory questions yet"
+          text="No theory questions have been added for this topic yet."
+        />
+      );
+    }
+
+    if (theoryDone) {
+      return (
+        <View style={styles.questionScreen}>
+          {renderFormatSwitch()}
+
+          <TheoryResults
+            theme={theme}
+            dark={isDark}
+            score={scoreTopic(theoryItems())}
+            rows={theoryRows()}
+            courseCode={selectedCourse?.code}
+            courseColor={selectedCourseTheme.color}
+            topicTitle={selectedTopic?.title}
+            onReview={() => {
+              setTheoryDone(false);
+              goToTheory(0, "prev");
+            }}
+          />
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.questionScreen}>
+        {renderFormatSwitch()}
+
+        <TheoryQuestionView
+          // Remounts per question, which is what resets the typeset/measure
+          // flags without a synchronous setState inside an effect.
+          key={current.id}
+          theme={theme}
+          html={current.html}
+          text={current.text}
+          answerHtml={current.answerHtml}
+          answerText={current.answerText}
+          marks={current.marks}
+          difficulty={current.difficulty}
+          index={theoryIndex}
+          total={theory.length}
+          segments={theory.map((item) => theoryRatings[item.id] ?? null)}
+          direction={theoryDir}
+          revealed={answerShown}
+          rating={theoryRatings[current.id] ?? null}
+          onReveal={() => setAnswerShown(true)}
+          onRate={(next) =>
+            setTheoryRatings((prev) => ({ ...prev, [current.id]: next }))
+          }
+          onPrev={() => goToTheory(Math.max(0, theoryIndex - 1), "prev")}
+          onNext={() =>
+            goToTheory(Math.min(theory.length - 1, theoryIndex + 1), "next")
+          }
+          onFinish={finishTheory}
+        />
+      </View>
+    );
+  }
   function renderQuestionMode() {
     if (loadingContent) return renderQuestionSkeleton();
     if (questions.length === 0 || !currentQuestion) {
@@ -2153,6 +2422,8 @@ export default function Study() {
 
     return (
       <View style={styles.questionScreen}>
+        {renderFormatSwitch()}
+
         {/* One representation of progress, not three. The old header carried
             "Question 3 of 12", "25%" and a bar — all the same fact. */}
         <View style={styles.questionHead}>
@@ -2919,7 +3190,7 @@ export default function Study() {
   }
   function renderActiveContent() {
     if (!selectedTopic) return renderTopicList();
-    if (activeTab === "Questions") return renderQuestionMode();
+    if (activeTab === "Questions") return renderQuestions();
     if (activeTab === "Materials") return renderMaterials();
     if (activeTab === "Cards") return renderQuickCards();
     return renderTopicList();
@@ -3447,6 +3718,7 @@ const styles = StyleSheet.create({
   questionText: {
     ...typeScale.section,
   },
+
   optionGroup: {
     borderRadius: radius.lg,
     overflow: "hidden",

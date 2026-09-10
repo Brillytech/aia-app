@@ -32,7 +32,8 @@ import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import { Segmented } from "../../ui/Segmented";
 import { marksFor, ratingFraction, scoreTopic, type ScoredItem, type SelfCheck } from "../../theoryScore";
-import { TheoryQuestion as TheoryQuestionView } from "../../ui/TheoryQuestion";
+import { GridQuestion, gradeGrid, isSupportedGrid, type GridAnswers } from "../../ui/GridQuestion";
+import { checkTone, TheoryQuestion as TheoryQuestionView } from "../../ui/TheoryQuestion";
 import { TheoryResults, type TheoryResultRow } from "../../ui/TheoryResults";
 import { openPrintWindow, printHtmlDocument, summaryPrintTitle } from "../../ui/print-html";
 import { FOLDER_OPEN_MS } from "../../ui/CourseFolder";
@@ -163,19 +164,19 @@ const STUDY_SPLIT = 1200;
 const COURSE_RAIL = 320;
 
 /**
- * A theory question, as this screen uses it.
+ * One question in the written paper, as this screen uses it.
  *
- * Deliberately not the raw row. THIS ADAPTER IS THE ONLY PLACE THAT NAMES
- * theory_questions COLUMNS — everything below reads these fields instead, so
- * when the real schema turns out to differ there is exactly one function to
- * correct rather than a screen's worth of property accesses.
+ * Two kinds share a sequence: free text you mark yourself against a model
+ * answer, and a table you fill in and have graded. A discriminated union
+ * rather than two lists, because they are one numbered set to the student —
+ * question 2 is question 2 regardless of what shape it is.
  *
- * The names below are the ones the table was described with; the table is
- * readable only to an authenticated role, so they could not be confirmed
- * against PostgREST before this was written. `describeRow` prints what
- * actually arrived, once, in dev.
+ * THE ADAPTERS ARE THE ONLY PLACE THAT NAME DATABASE COLUMNS. Everything
+ * below reads these fields, so a schema that turns out to differ is one
+ * function to correct rather than a screen's worth of property accesses.
  */
-type TheoryQuestion = {
+type TheoryItem = {
+  kind: "theory";
   id: string;
   html: string | null;
   text: string | null;
@@ -185,6 +186,19 @@ type TheoryQuestion = {
   difficulty: string | null;
 };
 
+type GridItem = {
+  kind: "grid";
+  id: string;
+  promptHtml: string | null;
+  promptText: string | null;
+  /** The raw jsonb. Validated by isSupportedGrid before it is drawn. */
+  grid: any;
+  marks: number | null;
+  difficulty: string | null;
+};
+
+type PaperItem = TheoryItem | GridItem;
+
 /** What the self-check buttons said, for the results breakdown. */
 const RATING_LABEL: Record<SelfCheck, string> = {
   missed: "Missed it",
@@ -192,8 +206,9 @@ const RATING_LABEL: Record<SelfCheck, string> = {
   got: "Got it",
 };
 
-function adaptTheory(rows: any[]): TheoryQuestion[] {
+function adaptTheory(rows: any[]): TheoryItem[] {
   return rows.map((row) => ({
+    kind: "theory" as const,
     id: String(row.id),
     html: row.question_html ?? null,
     text: row.question_text ?? null,
@@ -204,14 +219,30 @@ function adaptTheory(rows: any[]): TheoryQuestion[] {
   }));
 }
 
-/** Prints the real column names the first time a row arrives, in dev only. */
-let describedTheory = false;
-function describeRow(row: any) {
-  if (!__DEV__ || describedTheory || !row) return;
-  describedTheory = true;
-  console.log("[theory_questions] columns:", Object.keys(row).join(", "));
+function adaptGrid(rows: any[]): GridItem[] {
+  return rows.map((row) => ({
+    kind: "grid" as const,
+    id: String(row.id),
+    promptHtml: row.prompt_html ?? null,
+    promptText: row.prompt_text ?? null,
+    grid: row.grid ?? null,
+    marks: typeof row.marks === "number" ? row.marks : null,
+    difficulty: row.difficulty ? String(row.difficulty) : null,
+  }));
 }
 
+/**
+ * Prints a table's real column names the first time a row arrives, in dev.
+ *
+ * Both tables are readable only to an authenticated role, so neither shape
+ * could be confirmed against PostgREST before this was written.
+ */
+const described = new Set<string>();
+function describeRow(table: string, row: any) {
+  if (!__DEV__ || described.has(table) || !row) return;
+  described.add(table);
+  console.log(`[${table}] columns:`, Object.keys(row).join(", "));
+}
 const tabs = ["Topics", "Materials", "Questions", "Cards"];
 
 /** The three flashcard decks, in the order the auto-cycle already visits them. */
@@ -805,7 +836,10 @@ export default function Study() {
   const [activeTab, setActiveTab] = useState("Topics");
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [theory, setTheory] = useState<TheoryQuestion[]>([]);
+  const [paper, setPaper] = useState<PaperItem[]>([]);
+  /** Typed cell answers per grid question, keyed by `rowId:columnIndex`. */
+  const [gridAnswers, setGridAnswers] = useState<Record<string, GridAnswers>>({});
+  const [gridChecked, setGridChecked] = useState<Record<string, boolean>>({});
   const [theoryIndex, setTheoryIndex] = useState(0);
   // Per question, and reset on every move: a revealed answer that stayed
   // revealed as you paged would give the next one away before you read it.
@@ -1142,7 +1176,9 @@ export default function Study() {
     setActiveTab("Questions");
     setSelectedAnswers({});
     setQuestionIndex(0);
-    setTheory([]);
+    setPaper([]);
+    setGridAnswers({});
+    setGridChecked({});
     setTheoryIndex(0);
     setAnswerShown(false);
     setTheoryDir(null);
@@ -1160,6 +1196,7 @@ export default function Study() {
       { data: qs, error: qsError },
       { data: mats, error: matsError },
       { data: theoryRows, error: theoryError },
+      { data: gridRows, error: gridError },
     ] =
       await Promise.all([
         supabase
@@ -1182,14 +1219,31 @@ export default function Study() {
           .eq("course_id", course.id)
           .eq("topic_id", topic.id)
           .order("created_at", { ascending: true }),
+        supabase
+          .from("grid_questions")
+          .select("*")
+          .eq("course_id", course.id)
+          .eq("topic_id", topic.id)
+          .order("position", { ascending: true }),
       ]);
     if (qsError) console.log("QUESTIONS LOAD ERROR:", qsError.message);
     if (matsError) console.log("MATERIALS LOAD ERROR:", matsError.message);
     if (theoryError) console.log("THEORY LOAD ERROR:", theoryError.message);
+    if (gridError) console.log("GRID LOAD ERROR:", gridError.message);
     setQuestions(qs && qs.length > 0 ? qs : []);
     setMaterials(mats && mats.length > 0 ? mats : []);
-    describeRow(theoryRows?.[0]);
-    setTheory(theoryRows ? adaptTheory(theoryRows) : []);
+    describeRow("theory_questions", theoryRows?.[0]);
+    describeRow("grid_questions", gridRows?.[0]);
+
+    // Theory first, then grids. grid_questions has a `position` column and
+    // theory_questions does not, so there is no shared key to interleave on:
+    // sorting the merged list by `position ?? Infinity` would put every grid
+    // BEFORE every theory question, which is the opposite of the intent. Give
+    // theory_questions a position column and this becomes one sort.
+    setPaper([
+      ...(theoryRows ? adaptTheory(theoryRows) : []),
+      ...(gridRows ? adaptGrid(gridRows) : []),
+    ]);
     setLoadingContent(false);
   }
   function resetQuickCards() {
@@ -2236,7 +2290,7 @@ export default function Study() {
     // Only when there is genuinely a choice. A topic with just one kind
     // shows no control at all, so nothing about Questions changes for the
     // topics that have no theory content.
-    if (theory.length === 0 || questions.length === 0) return null;
+    if (paper.length === 0 || questions.length === 0) return null;
 
     return (
       <Segmented
@@ -2253,28 +2307,95 @@ export default function Study() {
   }
 
   /**
-   * What the topic's theory questions came to.
+   * How a grid question currently stands.
    *
-   * Grid questions will concatenate into this array with `source: "auto"`
-   * and a cells-correct fraction — `scoreTopic` needs no change to take
-   * them, which is the whole reason the fraction is computed by the caller
+   * Unchecked counts as UNATTEMPTED, not as zero out of seven — the same way
+   * an unrated theory question does. A student who has not pressed Check has
+   * not scored badly, they have not scored.
+   */
+  function gridOutcome(item: GridItem) {
+    const graded = isSupportedGrid(item.grid)
+      ? gradeGrid(item.grid, gridAnswers[item.id] || {})
+      : { correct: 0, total: 0 };
+
+    const done = Boolean(gridChecked[item.id]) && graded.total > 0;
+
+    return {
+      ...graded,
+      done,
+      fraction: done ? graded.correct / graded.total : null,
+      // The same three colours a self-check speaks in, so the progress strip
+      // reads as one language whichever kind of question produced it.
+      tone: !done
+        ? null
+        : graded.correct === graded.total
+          ? theme.success
+          : graded.correct > 0
+            ? theme.warning
+            : theme.error,
+    };
+  }
+
+  /**
+   * What the topic's written questions came to.
+   *
+   * One array for both kinds: every question contributes its own marks scaled
+   * by a fraction, and only the SOURCE of that fraction differs. scoreTopic
+   * needs no per-type branch, which is why the fraction is computed here
    * rather than inside it.
    */
-  function theoryItems(): ScoredItem[] {
-    return theory.map((item) => ({
-      id: item.id,
-      marks: item.marks,
-      fraction: ratingFraction(theoryRatings[item.id] ?? null),
-      source: "self" as const,
-    }));
+  function paperItems(): ScoredItem[] {
+    return paper.map((item) =>
+      item.kind === "grid"
+        ? {
+            id: item.id,
+            marks: item.marks,
+            fraction: gridOutcome(item).fraction,
+            source: "auto" as const,
+          }
+        : {
+            id: item.id,
+            marks: item.marks,
+            fraction: ratingFraction(theoryRatings[item.id] ?? null),
+            source: "self" as const,
+          },
+    );
+  }
+
+  /** One tone per question for the progress strip, or null for untouched. */
+  function paperTones(): (string | null)[] {
+    return paper.map((item) => {
+      if (item.kind === "grid") return gridOutcome(item).tone;
+
+      const rating = theoryRatings[item.id] ?? null;
+      return rating ? checkTone(theme, rating) : null;
+    });
   }
 
   /** One row per question for the results breakdown. */
-  function theoryRows(): TheoryResultRow[] {
-    return theory.map((item, position) => {
+  function paperRows(): TheoryResultRow[] {
+    return paper.map((item, position) => {
+      const marks = marksFor(item);
+
+      if (item.kind === "grid") {
+        const outcome = gridOutcome(item);
+
+        return {
+          id: item.id,
+          number: position + 1,
+          marks,
+          earned: outcome.fraction === null ? 0 : marks * outcome.fraction,
+          fraction: outcome.fraction,
+          source: "auto" as const,
+          detail: outcome.done
+            ? `${outcome.correct} of ${outcome.total} cells`
+            : "Not attempted",
+          tone: outcome.tone ?? theme.muted,
+        };
+      }
+
       const rating = theoryRatings[item.id] ?? null;
       const fraction = ratingFraction(rating);
-      const marks = marksFor(item);
 
       return {
         id: item.id,
@@ -2284,20 +2405,13 @@ export default function Study() {
         fraction,
         source: "self" as const,
         detail: rating ? RATING_LABEL[rating] : "Not attempted",
-        tone:
-          rating === "got"
-            ? theme.success
-            : rating === "partly"
-              ? theme.warning
-              : rating === "missed"
-                ? theme.error
-                : theme.muted,
+        tone: rating ? checkTone(theme, rating) : theme.muted,
       };
     });
   }
 
   function finishTheory() {
-    const result = scoreTopic(theoryItems());
+    const result = scoreTopic(paperItems());
     setTheoryDone(true);
 
     // Progress only. Deliberately NOT xp_events: the exam chain earns XP
@@ -2321,10 +2435,11 @@ export default function Study() {
   function renderQuestions() {
     if (loadingContent) return renderQuestionSkeleton();
 
-    // Theory when it is chosen, and also when it is all there is — a topic
-    // with only theory must not fall into the MCQ empty state.
-    const onlyTheory = theory.length > 0 && questions.length === 0;
-    if (onlyTheory || (questionFormat === "theory" && theory.length > 0)) {
+    // The written paper when it is chosen, and also when it is all there is —
+    // a topic with only written questions must not fall into the MCQ empty
+    // state.
+    const onlyPaper = paper.length > 0 && questions.length === 0;
+    if (onlyPaper || (questionFormat === "theory" && paper.length > 0)) {
       return renderTheoryMode();
     }
 
@@ -2332,14 +2447,14 @@ export default function Study() {
   }
 
   function renderTheoryMode() {
-    const current = theory[Math.min(theoryIndex, theory.length - 1)];
+    const current = paper[Math.min(theoryIndex, paper.length - 1)];
     if (!current) {
       return (
         <EmptyState
           theme={theme}
           icon="text-box-outline"
-          title="No theory questions yet"
-          text="No theory questions have been added for this topic yet."
+          title="No written questions yet"
+          text="No theory or table questions have been added for this topic yet."
         />
       );
     }
@@ -2352,8 +2467,8 @@ export default function Study() {
           <TheoryResults
             theme={theme}
             dark={isDark}
-            score={scoreTopic(theoryItems())}
-            rows={theoryRows()}
+            score={scoreTopic(paperItems())}
+            rows={paperRows()}
             courseCode={selectedCourse?.code}
             courseColor={selectedCourseTheme.color}
             topicTitle={selectedTopic?.title}
@@ -2366,37 +2481,61 @@ export default function Study() {
       );
     }
 
+    const shared = {
+      theme,
+      marks: current.marks,
+      difficulty: current.difficulty,
+      index: theoryIndex,
+      total: paper.length,
+      segments: paperTones(),
+      direction: theoryDir,
+      onPrev: () => goToTheory(Math.max(0, theoryIndex - 1), "prev"),
+      onNext: () => goToTheory(Math.min(paper.length - 1, theoryIndex + 1), "next"),
+      onFinish: finishTheory,
+    };
+
     return (
       <View style={styles.questionScreen}>
         {renderFormatSwitch()}
 
-        <TheoryQuestionView
-          // Remounts per question, which is what resets the typeset/measure
-          // flags without a synchronous setState inside an effect.
-          key={current.id}
-          theme={theme}
-          html={current.html}
-          text={current.text}
-          answerHtml={current.answerHtml}
-          answerText={current.answerText}
-          marks={current.marks}
-          difficulty={current.difficulty}
-          index={theoryIndex}
-          total={theory.length}
-          segments={theory.map((item) => theoryRatings[item.id] ?? null)}
-          direction={theoryDir}
-          revealed={answerShown}
-          rating={theoryRatings[current.id] ?? null}
-          onReveal={() => setAnswerShown(true)}
-          onRate={(next) =>
-            setTheoryRatings((prev) => ({ ...prev, [current.id]: next }))
-          }
-          onPrev={() => goToTheory(Math.max(0, theoryIndex - 1), "prev")}
-          onNext={() =>
-            goToTheory(Math.min(theory.length - 1, theoryIndex + 1), "next")
-          }
-          onFinish={finishTheory}
-        />
+        {/* Both are keyed by question id, which remounts them per question —
+            that is what resets the typeset/measure flags without a synchronous
+            setState inside an effect. */}
+        {current.kind === "grid" ? (
+          <GridQuestion
+            key={current.id}
+            {...shared}
+            grid={current.grid}
+            promptHtml={current.promptHtml}
+            promptText={current.promptText}
+            answers={gridAnswers[current.id] || {}}
+            checked={Boolean(gridChecked[current.id])}
+            onAnswer={(key, value) =>
+              setGridAnswers((prev) => ({
+                ...prev,
+                [current.id]: { ...(prev[current.id] || {}), [key]: value },
+              }))
+            }
+            onCheck={() =>
+              setGridChecked((prev) => ({ ...prev, [current.id]: true }))
+            }
+          />
+        ) : (
+          <TheoryQuestionView
+            key={current.id}
+            {...shared}
+            html={current.html}
+            text={current.text}
+            answerHtml={current.answerHtml}
+            answerText={current.answerText}
+            revealed={answerShown}
+            rating={theoryRatings[current.id] ?? null}
+            onReveal={() => setAnswerShown(true)}
+            onRate={(next) =>
+              setTheoryRatings((prev) => ({ ...prev, [current.id]: next }))
+            }
+          />
+        )}
       </View>
     );
   }

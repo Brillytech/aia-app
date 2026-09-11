@@ -3,7 +3,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Linking,
   Pressable,
   RefreshControl,
@@ -21,6 +20,7 @@ import { PageHeader } from "../ui/PageHeader";
 import { useBreakpoint } from "../ui/layout/breakpoints";
 import { SplitPane } from "../ui/layout/SplitPane";
 import { Screen } from "../ui/Screen";
+import { SkeletonBar } from "../ui/Skeleton";
 import { layout, radius, spacing, type, weight } from "../ui/tokens";
 
 type NotificationItem = {
@@ -38,9 +38,9 @@ type NotificationItem = {
 type PreferenceKey =
   | "study_reminders"
   | "practice_streaks"
-  | "exam_alerts"
   | "material_updates"
-  | "weekly_report";
+  | "weekly_report"
+  | "activity_updates";
 
 type NotificationPreference = {
   key: PreferenceKey;
@@ -65,9 +65,9 @@ const PREF_STORAGE_KEY = "lasu_scholar_notification_preferences";
 const DEFAULT_PREFS: Record<PreferenceKey, boolean> = {
   study_reminders: true,
   practice_streaks: true,
-  exam_alerts: true,
   material_updates: true,
   weekly_report: true,
+  activity_updates: true,
 };
 
 // Subtitles removed: all five restated their own title ("Study Reminders" /
@@ -81,12 +81,21 @@ const DEFAULT_PREFS: Record<PreferenceKey, boolean> = {
  */
 const NOTIFICATIONS_SPLIT = 1000;
 
+/**
+ * Exam alerts is gone. It promised warnings about exams the app has no way to
+ * know about — it holds no timetable and no exam dates — so it was an offer it
+ * could never keep.
+ *
+ * Activity & updates replaces it and sits last, because it is the catch-all:
+ * leaderboard rank changes, new features, and announcements. Anything that is
+ * not studying, practising, materials or the weekly report.
+ */
 const PREFERENCES: NotificationPreference[] = [
   { key: "study_reminders", title: "Study reminders", icon: "book-clock-outline" },
   { key: "practice_streaks", title: "Practice streaks", icon: "fire" },
-  { key: "exam_alerts", title: "Exam alerts", icon: "clipboard-alert-outline" },
   { key: "material_updates", title: "Material updates", icon: "file-document-plus-outline" },
   { key: "weekly_report", title: "Weekly report", icon: "chart-timeline-variant" },
+  { key: "activity_updates", title: "Activity & updates", icon: "bell-badge-outline" },
 ];
 
 function formatDate(value?: string | null) {
@@ -172,6 +181,69 @@ function destinationFor(item: NotificationItem): Destination | null {
   const byType = destinationForType(item.type);
 
   return byType ? { href: byType, external: false } : null;
+}
+
+/** Widths that differ per row, so the block reads as messages not a grid. */
+const SKEL_TITLES = [148, 116, 172, 132, 160];
+const SKEL_BODIES = ["78%", "62%", "85%", "70%", "58%"];
+
+/**
+ * A notification row with nothing in it yet: the 20pt glyph, a title over a
+ * message, and the date on the right. Same direction, gap and vertical
+ * padding as Row, so nothing shifts when the real rows arrive.
+ */
+function NotificationSkeleton({ theme, rows = 4 }: { theme: Theme; rows?: number }) {
+  return (
+    <>
+      {SKEL_TITLES.slice(0, rows).map((title, index) => (
+        <View key={index} style={styles.skelRow}>
+          <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
+
+          <View style={styles.skelBody}>
+            <SkeletonBar theme={theme} width={title} height={14} />
+            <SkeletonBar
+              theme={theme}
+              width={SKEL_BODIES[index]}
+              height={11}
+              style={styles.skelSecond}
+            />
+          </View>
+
+          <SkeletonBar theme={theme} width={58} height={12} />
+        </View>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The alerts pane. One row per real preference, with a switch-shaped
+ * placeholder — the switch is the widest thing in the row, and leaving it out
+ * would let the list reflow sideways when the real ones mount.
+ */
+function AlertsSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <>
+      {PREFERENCES.map((pref, index) => (
+        <View key={pref.key} style={styles.skelRow}>
+          <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
+          <View style={styles.skelBody}>
+            <SkeletonBar theme={theme} width={index % 2 ? 104 : 128} height={14} />
+          </View>
+          <SkeletonBar theme={theme} width={44} height={26} rounded={13} />
+        </View>
+      ))}
+
+      {/* Push notifications: a title over a status line, no switch. */}
+      <View style={styles.skelRow}>
+        <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
+        <View style={styles.skelBody}>
+          <SkeletonBar theme={theme} width={136} height={14} />
+          <SkeletonBar theme={theme} width={92} height={11} style={styles.skelSecond} />
+        </View>
+      </View>
+    </>
+  );
 }
 
 function getNotificationIcon(type?: string | null): IconName {
@@ -322,10 +394,19 @@ export default function NotificationsPage() {
       const saved = await AsyncStorage.getItem(PREF_STORAGE_KEY);
 
       if (saved) {
-        setPreferences({
-          ...DEFAULT_PREFS,
-          ...JSON.parse(saved),
+        // Only keys this version knows about. A device that toggled the old
+        // Exam alerts switch has `exam_alerts` in its stored blob, and a plain
+        // spread would carry that dead key forward on every save from now on.
+        // Unknown keys are dropped; missing ones fall back to the default, so
+        // a new category arrives switched on rather than undefined.
+        const stored = JSON.parse(saved) as Partial<Record<PreferenceKey, boolean>>;
+        const next = { ...DEFAULT_PREFS };
+
+        (Object.keys(DEFAULT_PREFS) as PreferenceKey[]).forEach((key) => {
+          if (typeof stored[key] === "boolean") next[key] = stored[key] as boolean;
         });
+
+        setPreferences(next);
       }
     } catch {
       setPreferences(DEFAULT_PREFS);
@@ -501,18 +582,6 @@ export default function NotificationsPage() {
     router.push(destination.href as any);
   }
 
-  if (loading) {
-    return (
-      <Screen backgroundColor={theme.bg}>
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={theme.accent} />
-          <Text style={[styles.loadingTitle, { color: theme.muted }]}>
-            Loading notifications
-          </Text>
-        </View>
-      </Screen>
-    );
-  }
 
   return (
     <Screen backgroundColor={theme.bg}>
@@ -540,58 +609,144 @@ export default function NotificationsPage() {
           ) : null
         }
       >
-        {wide ? (
-          <SplitPane
-            theme={theme}
-            // Preferences follow the feed: the feed is what the screen is for,
-            // and a settings rail leading the page would invert that.
-            side="end"
-            railWidth={280}
-            divider={false}
-            rail={
-              <View>
-                <Text style={[styles.railTitle, { color: theme.muted }]}>Alerts</Text>
-            <Rows theme={theme} title={wide ? undefined : "Alerts"}>
-              {PREFERENCES.map((item) => (
+        {/* Placeholders in the real chrome rather than a spinner on a screen
+            of its own — which is what this was, so the entire layout arrived
+            at once. Both arrangements are covered: the feed and the alerts
+            rail side by side when there is room, stacked when there is not. */}
+        {loading ? (
+          wide ? (
+            <SplitPane
+              theme={theme}
+              side="end"
+              railWidth={280}
+              divider={false}
+              rail={
+                <Rows theme={theme} title="Alerts">
+                  <AlertsSkeleton theme={theme} />
+                </Rows>
+              }
+            >
+              <Rows theme={theme} title="Recent">
+                <NotificationSkeleton theme={theme} />
+              </Rows>
+            </SplitPane>
+          ) : (
+            <>
+              <Rows theme={theme} title="Recent">
+                <NotificationSkeleton theme={theme} />
+              </Rows>
+
+              <Rows theme={theme} title="Alerts">
+                <AlertsSkeleton theme={theme} />
+              </Rows>
+            </>
+          )
+        ) : (
+          <>
+          {wide ? (
+            <SplitPane
+              theme={theme}
+              // Preferences follow the feed: the feed is what the screen is for,
+              // and a settings rail leading the page would invert that.
+              side="end"
+              railWidth={280}
+              divider={false}
+              rail={
+                <View>
+                  <Text style={[styles.railTitle, { color: theme.muted }]}>Alerts</Text>
+              <Rows theme={theme} title={wide ? undefined : "Alerts"}>
+                {PREFERENCES.map((item) => (
+                  <Row
+                    key={item.key}
+                    theme={theme}
+                    icon={item.icon}
+                    label={item.title}
+                    accessory={
+                      <Switch
+                        value={preferences[item.key]}
+                        onValueChange={() => togglePreference(item.key)}
+                        disabled={savingPrefs}
+                        trackColor={{ false: theme.soft, true: theme.accent }}
+                        thumbColor={theme.card}
+                        ios_backgroundColor={theme.soft}
+                      />
+                    }
+                  />
+                ))}
+
+                {/* Was its own "Device" section — a card and a shadow around one
+                    row. It belongs with the alert toggles it sits beside anyway:
+                    both answer "what reaches me, and how". */}
                 <Row
-                  key={item.key}
                   theme={theme}
-                  icon={item.icon}
-                  label={item.title}
-                  accessory={
-                    <Switch
-                      value={preferences[item.key]}
-                      onValueChange={() => togglePreference(item.key)}
-                      disabled={savingPrefs}
-                      trackColor={{ false: theme.soft, true: theme.accent }}
-                      thumbColor={theme.card}
-                      ios_backgroundColor={theme.soft}
-                    />
+                  icon="cellphone-message"
+                  label="Push notifications"
+                  value={wide ? undefined : "Not connected"}
+                  secondary={wide ? "Not connected" : undefined}
+                  onPress={() =>
+                    showAlert(
+                      "info",
+                      "Push Notifications",
+                      "Device push notifications will be connected before the final production build."
+                    )
                   }
                 />
-              ))}
+              </Rows>
+                </View>
+              }
+            >
+            <Rows
+              theme={theme}
+              title={unreadOnly ? "Unread" : "Recent"}
+              action={
+                unreadCount > 0 || unreadOnly
+                  ? {
+                      label: unreadOnly ? "Show all" : `${unreadCount} unread`,
+                      onPress: () => setUnreadOnly((prev) => !prev),
+                    }
+                  : undefined
+              }
+            >
+              {visibleNotifications.length === 0 ? (
+                <Row
+                  theme={theme}
+                  icon={unreadOnly ? "check-circle-outline" : "bell-sleep-outline"}
+                  label={unreadOnly ? "Nothing unread" : "No notifications yet"}
+                  chevron={false}
+                />
+              ) : (
+                visibleNotifications.map((item) => {
+                  const read = isRead(item);
 
-              {/* Was its own "Device" section — a card and a shadow around one
-                  row. It belongs with the alert toggles it sits beside anyway:
-                  both answer "what reaches me, and how". */}
-              <Row
-                theme={theme}
-                icon="cellphone-message"
-                label="Push notifications"
-                value={wide ? undefined : "Not connected"}
-                secondary={wide ? "Not connected" : undefined}
-                onPress={() =>
-                  showAlert(
-                    "info",
-                    "Push Notifications",
-                    "Device push notifications will be connected before the final production build."
-                  )
-                }
-              />
+                  return (
+                    <Row
+                      key={item.id}
+                      theme={theme}
+                      icon={getNotificationIcon(item.type)}
+                      iconColor={getNotificationColor(item.type, theme)}
+                      label={item.title}
+                      secondary={item.message}
+                      value={formatDate(item.created_at)}
+                      chevron={Boolean(destinationFor(item))}
+                      accessory={
+                        read ? undefined : (
+                          <View
+                            style={[
+                              styles.unreadDot,
+                              { backgroundColor: getNotificationColor(item.type, theme) },
+                            ]}
+                          />
+                        )
+                      }
+                      onPress={() => openNotification(item)}
+                    />
+                  );
+                })
+              )}
             </Rows>
-              </View>
-            }
-          >
+            </SplitPane>
+          ) : (
+            <>
           <Rows
             theme={theme}
             title={unreadOnly ? "Unread" : "Recent"}
@@ -641,96 +796,46 @@ export default function NotificationsPage() {
               })
             )}
           </Rows>
-          </SplitPane>
-        ) : (
-          <>
-        <Rows
-          theme={theme}
-          title={unreadOnly ? "Unread" : "Recent"}
-          action={
-            unreadCount > 0 || unreadOnly
-              ? {
-                  label: unreadOnly ? "Show all" : `${unreadCount} unread`,
-                  onPress: () => setUnreadOnly((prev) => !prev),
+
+          <Rows theme={theme} title="Alerts">
+            {PREFERENCES.map((item) => (
+              <Row
+                key={item.key}
+                theme={theme}
+                icon={item.icon}
+                label={item.title}
+                accessory={
+                  <Switch
+                    value={preferences[item.key]}
+                    onValueChange={() => togglePreference(item.key)}
+                    disabled={savingPrefs}
+                    trackColor={{ false: theme.soft, true: theme.accent }}
+                    thumbColor={theme.card}
+                    ios_backgroundColor={theme.soft}
+                  />
                 }
-              : undefined
-          }
-        >
-          {visibleNotifications.length === 0 ? (
+              />
+            ))}
+
+            {/* Was its own "Device" section — a card and a shadow around one
+                row. It belongs with the alert toggles it sits beside anyway:
+                both answer "what reaches me, and how". */}
             <Row
               theme={theme}
-              icon={unreadOnly ? "check-circle-outline" : "bell-sleep-outline"}
-              label={unreadOnly ? "Nothing unread" : "No notifications yet"}
-              chevron={false}
-            />
-          ) : (
-            visibleNotifications.map((item) => {
-              const read = isRead(item);
-
-              return (
-                <Row
-                  key={item.id}
-                  theme={theme}
-                  icon={getNotificationIcon(item.type)}
-                  iconColor={getNotificationColor(item.type, theme)}
-                  label={item.title}
-                  secondary={item.message}
-                  value={formatDate(item.created_at)}
-                  chevron={Boolean(destinationFor(item))}
-                  accessory={
-                    read ? undefined : (
-                      <View
-                        style={[
-                          styles.unreadDot,
-                          { backgroundColor: getNotificationColor(item.type, theme) },
-                        ]}
-                      />
-                    )
-                  }
-                  onPress={() => openNotification(item)}
-                />
-              );
-            })
-          )}
-        </Rows>
-
-        <Rows theme={theme} title="Alerts">
-          {PREFERENCES.map((item) => (
-            <Row
-              key={item.key}
-              theme={theme}
-              icon={item.icon}
-              label={item.title}
-              accessory={
-                <Switch
-                  value={preferences[item.key]}
-                  onValueChange={() => togglePreference(item.key)}
-                  disabled={savingPrefs}
-                  trackColor={{ false: theme.soft, true: theme.accent }}
-                  thumbColor={theme.card}
-                  ios_backgroundColor={theme.soft}
-                />
+              icon="cellphone-message"
+              label="Push notifications"
+              value="Not connected"
+              onPress={() =>
+                showAlert(
+                  "info",
+                  "Push Notifications",
+                  "Device push notifications will be connected before the final production build."
+                )
               }
             />
-          ))}
-
-          {/* Was its own "Device" section — a card and a shadow around one
-              row. It belongs with the alert toggles it sits beside anyway:
-              both answer "what reaches me, and how". */}
-          <Row
-            theme={theme}
-            icon="cellphone-message"
-            label="Push notifications"
-            value="Not connected"
-            onPress={() =>
-              showAlert(
-                "info",
-                "Push Notifications",
-                "Device push notifications will be connected before the final production build."
-              )
-            }
-          />
-        </Rows>
+          </Rows>
+            </>
+          )}
           </>
         )}
       </PageHeader>
@@ -753,14 +858,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: layout.screenGutter,
     paddingBottom: layout.tabBarInset,
   },
-  loadingWrap: {
-    flex: 1,
+  // --- loading placeholders ------------------------------------------------
+  /** Matches Row exactly: same direction, gap and vertical padding. */
+  skelRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: spacing.md,
+    paddingVertical: spacing.md,
   },
-  loadingTitle: {
-    ...type.body,
+  skelBody: {
+    flex: 1,
+  },
+  skelSecond: {
+    marginTop: spacing.xs + 2,
   },
   // The rail's own label. Not a Rows title — that sits inside the group,
   // and here the group IS the rail.

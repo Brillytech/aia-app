@@ -12,7 +12,17 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
-import { AlertType, category, Theme, useThemeMode } from "../theme";
+import {
+  colorForType,
+  DEFAULT_PREFS,
+  fetchNotifications,
+  iconForType,
+  PREF_STORAGE_KEY,
+  readPreferences,
+  type NotificationRow,
+  type PreferenceKey,
+} from "../notify";
+import { AlertType, Theme, useThemeMode } from "../theme";
 import { AlertModal } from "../ui/AlertModal";
 import type { IconName } from "../ui/alerts";
 import { Row, Rows } from "../ui/Rows";
@@ -23,32 +33,13 @@ import { Screen } from "../ui/Screen";
 import { SkeletonBar } from "../ui/Skeleton";
 import { layout, radius, spacing, type, weight } from "../ui/tokens";
 
-type NotificationItem = {
-  id: string;
-  title: string;
-  message: string;
-  type?: string | null;
-  is_read?: boolean | null;
-  action_url?: string | null;
-  created_at?: string | null;
-  /** Null marks a broadcast row shared by every student. */
-  user_id?: string | null;
-};
-
-type PreferenceKey =
-  | "study_reminders"
-  | "practice_streaks"
-  | "material_updates"
-  | "weekly_report"
-  | "activity_updates";
-
+/** The row shape, named locally because this screen has always called it that. */
+type NotificationItem = NotificationRow;
 type NotificationPreference = {
   key: PreferenceKey;
   title: string;
   icon: IconName;
 };
-
-const PREF_STORAGE_KEY = "lasu_scholar_notification_preferences";
 
 /**
  * Read-state for broadcast notifications lives in `public.notification_reads`,
@@ -62,16 +53,6 @@ const PREF_STORAGE_KEY = "lasu_scholar_notification_preferences";
  * which also survives a reinstall and follows the user across devices.
  */
 
-const DEFAULT_PREFS: Record<PreferenceKey, boolean> = {
-  study_reminders: true,
-  practice_streaks: true,
-  material_updates: true,
-  weekly_report: true,
-  activity_updates: true,
-};
-
-// Subtitles removed: all five restated their own title ("Study Reminders" /
-// "Gentle nudges to continue your study streak."). The switch is the content.
 /**
  * Width at which the alert toggles move out of the feed and beside it.
  *
@@ -246,34 +227,6 @@ function AlertsSkeleton({ theme }: { theme: Theme }) {
   );
 }
 
-function getNotificationIcon(type?: string | null): IconName {
-  const clean = String(type || "").toLowerCase();
-
-  if (clean.includes("exam")) return "clipboard-text-clock-outline";
-  if (clean.includes("practice")) return "target";
-  if (clean.includes("study")) return "book-open-page-variant-outline";
-  if (clean.includes("material")) return "file-document-outline";
-  if (clean.includes("xp")) return "star-four-points";
-  if (clean.includes("warning")) return "alert-outline";
-
-  return "bell-outline";
-}
-
-// Every literal this used to return had an exact token equivalent, so these
-// are the same colours by value — just sourced from one place now.
-function getNotificationColor(type: string | null | undefined, theme: Theme) {
-  const clean = String(type || "").toLowerCase();
-
-  if (clean.includes("exam")) return category.red;
-  if (clean.includes("practice")) return category.orange;
-  if (clean.includes("study")) return category.blue;
-  if (clean.includes("material")) return category.green;
-  if (clean.includes("xp")) return category.purple;
-  if (clean.includes("warning")) return theme.warning;
-
-  return category.teal;
-}
-
 export default function NotificationsPage() {
   const { theme } = useThemeMode();
   const wide = useBreakpoint(NOTIFICATIONS_SPLIT);
@@ -390,27 +343,7 @@ export default function NotificationsPage() {
   }
 
   async function loadPreferences() {
-    try {
-      const saved = await AsyncStorage.getItem(PREF_STORAGE_KEY);
-
-      if (saved) {
-        // Only keys this version knows about. A device that toggled the old
-        // Exam alerts switch has `exam_alerts` in its stored blob, and a plain
-        // spread would carry that dead key forward on every save from now on.
-        // Unknown keys are dropped; missing ones fall back to the default, so
-        // a new category arrives switched on rather than undefined.
-        const stored = JSON.parse(saved) as Partial<Record<PreferenceKey, boolean>>;
-        const next = { ...DEFAULT_PREFS };
-
-        (Object.keys(DEFAULT_PREFS) as PreferenceKey[]).forEach((key) => {
-          if (typeof stored[key] === "boolean") next[key] = stored[key] as boolean;
-        });
-
-        setPreferences(next);
-      }
-    } catch {
-      setPreferences(DEFAULT_PREFS);
-    }
+    setPreferences(await readPreferences());
   }
 
   async function savePreferences(nextPrefs: Record<PreferenceKey, boolean>) {
@@ -440,63 +373,10 @@ export default function NotificationsPage() {
     // write, which is what `react-hooks/set-state-in-effect` requires of
     // anything the mount effect calls.
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
-
-      if (!user) {
-        setNotifications([]);
-        return;
-      }
-
-      // The `notifications` table carries publishing, expiry and five
-      // targeting columns that this screen used to ignore completely — it
-      // asked only "is it mine or is it a broadcast". That meant students saw
-      // unpublished drafts, notifications past their expiry, and broadcasts
-      // aimed at other schools, departments and levels.
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("school, faculty, department, level, role")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      let query = supabase
-        .from("notifications")
-        .select("id, title, message, type, is_read, action_url, created_at, user_id")
-        .or(`user_id.eq.${user.id},user_id.is.null`)
-        // NULL counts as published/never-expiring so rows written before
-        // these columns existed keep showing.
-        .or("is_published.is.null,is_published.eq.true")
-        .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`);
-
-      // A null target means "everyone", so each filter is
-      // "unset OR matches me". Values are quoted because department and
-      // faculty names contain spaces and commas, which are PostgREST
-      // filter syntax.
-      const targets: [string, string | null | undefined][] = [
-        ["target_school", profile?.school],
-        ["target_faculty", profile?.faculty],
-        ["target_department", profile?.department],
-        ["target_level", profile?.level],
-        ["target_role", profile?.role],
-      ];
-
-      targets.forEach(([column, value]) => {
-        query = value
-          ? query.or(`${column}.is.null,${column}.eq."${String(value).replace(/"/g, '\\"')}"`)
-          : query.is(column, null);
-      });
-
-      const { data, error } = await query
-        .order("created_at", { ascending: false })
-        .limit(50);
-
-      if (error) {
-        console.log("NOTIFICATIONS ERROR:", error.message);
-        setNotifications([]);
-        return;
-      }
-
-      setNotifications((data || []) as NotificationItem[]);
+      // The targeting rules live in notify.ts, because the app-open popup
+      // check asks exactly the same question, and a second copy of those
+      // five `or` clauses would drift the first time a target column changed.
+      setNotifications(await fetchNotifications());
     } finally {
       setLoading(false);
     }
@@ -722,8 +602,8 @@ export default function NotificationsPage() {
                     <Row
                       key={item.id}
                       theme={theme}
-                      icon={getNotificationIcon(item.type)}
-                      iconColor={getNotificationColor(item.type, theme)}
+                      icon={iconForType(item.type)}
+                      iconColor={colorForType(item.type, theme)}
                       label={item.title}
                       secondary={item.message}
                       value={formatDate(item.created_at)}
@@ -733,7 +613,7 @@ export default function NotificationsPage() {
                           <View
                             style={[
                               styles.unreadDot,
-                              { backgroundColor: getNotificationColor(item.type, theme) },
+                              { backgroundColor: colorForType(item.type, theme) },
                             ]}
                           />
                         )
@@ -774,8 +654,8 @@ export default function NotificationsPage() {
                   <Row
                     key={item.id}
                     theme={theme}
-                    icon={getNotificationIcon(item.type)}
-                    iconColor={getNotificationColor(item.type, theme)}
+                    icon={iconForType(item.type)}
+                    iconColor={colorForType(item.type, theme)}
                     label={item.title}
                     secondary={item.message}
                     value={formatDate(item.created_at)}
@@ -785,7 +665,7 @@ export default function NotificationsPage() {
                         <View
                           style={[
                             styles.unreadDot,
-                            { backgroundColor: getNotificationColor(item.type, theme) },
+                            { backgroundColor: colorForType(item.type, theme) },
                           ]}
                         />
                       )

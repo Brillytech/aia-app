@@ -1,8 +1,11 @@
-import { Stack } from "expo-router";
+import { router, Stack } from "expo-router";
+import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
+import { dismissPopup, popExternalNotification, useNotificationPopup } from "../notify";
 import { useInstallPrompt } from "../pwa/useInstallPrompt";
 import { useServiceWorker } from "../pwa/useServiceWorker";
 import { useThemeMode } from "../theme";
+import { AlertModal } from "../ui/AlertModal";
 import { AppBanner } from "../ui/AppBanner";
 import { useIsDesktop } from "../ui/layout/breakpoints";
 import { elevation } from "../ui/tokens";
@@ -42,6 +45,22 @@ export default function RootLayout() {
 
   const { updateReady, applyUpdate } = useServiceWorker();
   const install = useInstallPrompt();
+
+  /**
+   * The popup lives at the root because it has to appear over any screen, and
+   * because whatever triggers it is usually somewhere else — finishing a
+   * practice session, or simply opening the app.
+   */
+  const popup = useNotificationPopup();
+
+  // Announcements, and anything else written outside this device. Everything
+  // the app creates itself pops from the value it just created, so this is the
+  // only path that has to go and look.
+  useEffect(() => {
+    popExternalNotification().catch(() => {
+      // Not worth an error surface: it will be in the list either way.
+    });
+  }, []);
 
   // The update notice outranks the install offer: a stale build is a
   // correctness problem, being uninstalled is only a missed nicety. Never both
@@ -126,6 +145,31 @@ export default function RootLayout() {
             onDismiss={install.dismiss}
           />
         ) : null}
+
+        {/* The same sheet as every other dialog in the app, wearing the
+            notification's own category instead of an AlertType. */}
+        <AlertModal
+          theme={theme}
+          visible={Boolean(popup)}
+          type="info"
+          kicker={popup?.kicker}
+          icon={popup?.icon}
+          accent={popup?.accent}
+          title={popup?.title || ""}
+          message={popup?.message || ""}
+          // With somewhere to go, the primary action goes there. Without, the
+          // only honest button is one that closes it — the same rule the
+          // notifications list follows by hiding its chevron.
+          primaryLabel={popup?.href ? popup.actionLabel || "Open" : "Got it"}
+          onPrimary={() => {
+            const href = popup?.href;
+            dismissPopup();
+            if (href) router.push(href as any);
+          }}
+          secondaryLabel={popup?.href ? "Not now" : undefined}
+          onSecondary={popup?.href ? dismissPopup : undefined}
+          onRequestClose={dismissPopup}
+        />
       </View>
     </View>
   );

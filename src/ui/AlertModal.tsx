@@ -8,7 +8,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { AlertType, Theme } from "../theme";
-import { alertColor, alertIcon } from "./alerts";
+import { alertColor, alertIcon, type IconName } from "./alerts";
 import { useIsDesktop } from "./layout/breakpoints";
 import { haptics } from "./haptics";
 import { motion, radius, spacing, type, weight, withAlpha } from "./tokens";
@@ -22,6 +22,18 @@ import { motion, radius, spacing, type, weight, withAlpha } from "./tokens";
  *
  * Still purely presentational: each screen keeps its own state and handlers
  * and passes them in, so adopting this changed no behaviour.
+ *
+ * ALSO CARRIES NOTIFICATIONS
+ * A notification popup is the same object: an icon, a title, a message and
+ * one or two actions. Rather than stand up a second popup system beside this
+ * one — two sheets to keep in visual step, two sets of insets and desktop
+ * behaviour — the three things a notification needs differently are optional
+ * props: its own icon and accent instead of the four AlertType semantics, and
+ * a kicker naming the category.
+ *
+ * The kicker is the one piece an alert never wants. An alert is a reply to
+ * something you just did, so its subject is obvious; a notification arrives
+ * unprompted and has to say what it is about before it says anything else.
  */
 export function AlertModal({
   theme,
@@ -29,6 +41,9 @@ export function AlertModal({
   type: alertType,
   title,
   message,
+  kicker,
+  icon,
+  accent,
   primaryLabel,
   onPrimary,
   secondaryLabel,
@@ -40,6 +55,12 @@ export function AlertModal({
   type: AlertType;
   title: string;
   message: string;
+  /** Small label above the title, in the accent. Notifications only. */
+  kicker?: string;
+  /** Overrides the icon the AlertType would pick. */
+  icon?: IconName;
+  /** Overrides the colour the AlertType would pick. */
+  accent?: string;
   primaryLabel: string;
   onPrimary: () => void;
   secondaryLabel?: string;
@@ -47,7 +68,7 @@ export function AlertModal({
   /** Android hardware back, and tap-outside. */
   onRequestClose?: () => void;
 }) {
-  const color = alertColor(alertType, theme);
+  const color = accent ?? alertColor(alertType, theme);
   const insets = useSafeAreaInsets();
   const desktop = useIsDesktop();
   const dark = theme.mode === "dark";
@@ -94,8 +115,12 @@ export function AlertModal({
           <View style={[styles.grabber, { backgroundColor: theme.border }]} />
 
           <View style={[styles.iconWrap, { backgroundColor: withAlpha(color, dark ? 0.2 : 0.13) }]}>
-            <MaterialCommunityIcons name={alertIcon[alertType]} size={26} color={color} />
+            <MaterialCommunityIcons name={icon ?? alertIcon[alertType]} size={26} color={color} />
           </View>
+
+          {kicker ? (
+            <Text style={[styles.kicker, { color }]}>{kicker.toUpperCase()}</Text>
+          ) : null}
 
           <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
           <Text style={[styles.message, { color: theme.muted }]}>{message}</Text>
@@ -174,6 +199,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.lg,
+  },
+  kicker: {
+    ...type.kicker,
+    textAlign: "center",
+    marginBottom: spacing.xs,
   },
   title: {
     ...type.title,

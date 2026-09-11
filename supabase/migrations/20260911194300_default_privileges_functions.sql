@@ -1,0 +1,53 @@
+-- Stop new functions in `public` from being born callable by anon.
+--
+-- SAFE TO RUN NOW. Affects only functions created AFTER it; nothing existing
+-- changes, so nothing currently working can break.
+--
+-- WHAT WENT WRONG WITHOUT IT
+-- The four leaderboard functions were created and immediately callable with
+-- the anon key that ships inside the client bundle — one of them handing back
+-- student names, departments and XP totals, and one that was meant to be
+-- callable by nobody handing back user ids and totals. The migrations that
+-- created them each ended with `revoke all on function ... from public`, both
+-- reported "Success. No rows returned", and both closed nothing: the grant did
+-- not come from the PUBLIC pseudo-role, it came from this project's default
+-- privileges, which grant EXECUTE on new functions to `anon`, `authenticated`
+-- and `service_role` by name.
+--
+-- Revoking per-function after the fact works, and 20260911160922 did it. But it
+-- only works when somebody remembers, and the failure mode is silent: the
+-- function works perfectly for the app either way. This removes the trapdoor
+-- instead of stepping around it.
+--
+-- AFTER THIS
+-- A new function in `public` is callable by `authenticated` and `service_role`,
+-- and not by `anon`. Anything that genuinely needs to be callable before
+-- sign-in — there is nothing like that today — needs an explicit
+-- `grant execute ... to anon`, which is a line someone has to write on purpose.
+--
+-- SCOPE
+-- ALTER DEFAULT PRIVILEGES applies to objects created by a specific role. This
+-- names `postgres` explicitly rather than relying on the session's role, since
+-- that is the owner of everything created through the SQL editor and of the
+-- four functions this came from. If a function is ever created by a different
+-- role, it will not be covered — `\ddp` in psql, or the query at the bottom,
+-- shows what is actually in place.
+alter default privileges for role postgres in schema public
+  revoke execute on functions from anon;
+
+-- `authenticated` and `service_role` keep their defaults deliberately. Removing
+-- those too would mean every RPC needs a grant before the app can call it,
+-- which trades a security default for a reliability footgun — and the exposure
+-- being closed here is specifically the unauthenticated one.
+
+
+-- To confirm afterwards, this should list the `public` schema entry with anon
+-- absent from the EXECUTE defaults:
+--
+--   select defaclrole::regrole as owner,
+--          defaclnamespace::regnamespace as schema,
+--          defaclobjtype as obj_type,
+--          defaclacl as defaults
+--   from pg_default_acl
+--   where defaclnamespace = 'public'::regnamespace
+--     and defaclobjtype = 'f';

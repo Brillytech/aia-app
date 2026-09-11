@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getBuildId } from "./buildId";
 
 /**
  * Registers the service worker and surfaces when a new build is waiting.
@@ -18,10 +19,30 @@ export function useServiceWorker() {
   const waitingRef = useRef<ServiceWorker | null>(null);
   /** Guards the reload loop that fires when several tabs change controller. */
   const reloadedRef = useRef(false);
+  /** Kept so the app can re-check for a new build when it regains focus. */
+  const registrationRef = useRef<ServiceWorkerRegistration | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!("serviceWorker" in navigator)) return;
+
+    // Never in development.
+    //
+    // A worker installed on localhost outlives the dev server that served
+    // it: it answers every later navigation on that origin from its own
+    // precache, so Metro can recompile all it likes and the browser keeps
+    // showing the build that was cached. There is no upside — offline
+    // support is not something you need while editing the thing — and the
+    // downside is hours spent wondering why a change will not appear.
+    //
+    // The exported build is not in __DEV__, so a locally served `dist` still
+    // registers one, which is correct: that is the artefact being tested.
+    if (__DEV__) return;
+
+    // Printed once, so the first question — is this even my build? — is
+    // answerable from the console without diffing a bundle.
+    const buildId = getBuildId();
+    if (buildId) console.info(`LASU Scholar build ${buildId}`);
 
     let cancelled = false;
 
@@ -57,6 +78,7 @@ export function useServiceWorker() {
       .register("/sw.js")
       .then((registration) => {
         if (cancelled) return;
+        registrationRef.current = registration;
         watch(registration);
       })
       .catch((error) => {
@@ -73,9 +95,24 @@ export function useServiceWorker() {
 
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
 
+    // The browser checks for a new worker on navigation. A PWA that is
+    // installed and left open does not navigate — which is the whole point of
+    // installing it — so without this a student can sit on a superseded build
+    // indefinitely and never be offered the update. Coming back to the app is
+    // the natural moment to look.
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      registrationRef.current?.update().catch(() => {
+        // Offline, most likely. Nothing to do: the next foreground tries again.
+      });
+    }
+
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       cancelled = true;
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

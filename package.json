@@ -63,7 +63,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "postinstall": "node ./scripts/sync-katex.js",
-    "build:web": "expo export -p web && node ./scripts/build-sw.mjs dist"
+    "build:web": "expo export -p web && node ./scripts/stamp-build.mjs dist && node ./scripts/build-sw.mjs dist"
   },
   "private": true,
   "allowScripts": {

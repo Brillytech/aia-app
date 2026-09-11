@@ -15,6 +15,7 @@ import { SplitPane } from "../ui/layout/SplitPane";
 import { Segmented } from "../ui/Segmented";
 import type { IconName } from "../ui/alerts";
 import { layout, radius, spacing, type as typeScale, weight } from "../ui/tokens";
+import { getBuildId } from "../pwa/buildId";
 
 const PRIVACY_URL = "https://lasuscholar.com/privacy";
 const TERMS_URL = "https://lasuscholar.com/terms";
@@ -22,6 +23,19 @@ const WHATSAPP_URL = "https://wa.me/2347066884933";
 
 /** Single source for the version — surfaced as a row and quoted in the About dialog. */
 const APP_VERSION = "1.0";
+
+/**
+ * The version plus, on the web, which build is actually running.
+ *
+ * `1.0` has not changed in a long time and cannot answer the question that
+ * keeps coming up — whether the browser is running the latest deploy. The
+ * build id is stamped into index.html at export time and says so exactly.
+ */
+function versionLabel() {
+  const build = getBuildId();
+
+  return build ? `${APP_VERSION} · ${build}` : APP_VERSION;
+}
 
 /**
  * Width at which settings stops being one long list and becomes two panes.
@@ -330,12 +344,12 @@ export default function SettingsPage() {
             showAlert({
               type: "info",
               title: "About LASU Scholar",
-              message: `LASU Scholar is an independent learning platform powered by AIA•ACADEMY. It is not officially affiliated with Lagos State University. Version ${APP_VERSION}`,
+              message: `LASU Scholar is an independent learning platform powered by AIA•ACADEMY. It is not officially affiliated with Lagos State University. Version ${versionLabel()}`,
             })
           }
         />
 
-        <Row theme={theme} icon="tag-outline" label="Version" value={APP_VERSION} />
+        <Row theme={theme} icon="tag-outline" label="Version" value={versionLabel()} />
       </Rows>
     );
   }

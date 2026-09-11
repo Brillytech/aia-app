@@ -25,6 +25,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
 import { sortCoursesAlphabetically } from "../../courses";
+import { showPopup } from "../../notify";
+import { practiceStreak } from "../../practiceStreak";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
 import { useContentInset } from "../../ui/layout/breakpoints";
@@ -818,7 +820,49 @@ export default function Practice() {
       setLoading(false);
       setScreen("result");
       animateResult();
+
+      // Deliberately not awaited. The result screen is what the student
+      // asked for; the streak is a remark on top of it and should never be
+      // the reason the score takes longer to appear.
+      celebrateStreak();
     }, 850);
+  }
+
+  /**
+   * Congratulates a streak, once a day at most.
+   *
+   * FIRST SESSION ONLY
+   * Four sessions in an evening should not produce four identical messages,
+   * so this fires only when today's session was today's first.
+   *
+   * TWO DAYS BEFORE IT COUNTS
+   * One day is not a streak. Calling a single session a streak of one is the
+   * kind of congratulation that teaches a student to ignore the next one.
+   *
+   * The count comes from the practice attempts themselves, not from
+   * `profiles.daily_streak` — that column is incremented whenever the
+   * dashboard loads, with no gate on activity, so it measures app opens.
+   */
+  async function celebrateStreak() {
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData.user;
+
+    if (!user) return;
+
+    const { days, firstToday } = await practiceStreak(user.id);
+
+    if (!firstToday || days < 2) return;
+
+    // `showPopup` checks the Practice streaks toggle before anything is
+    // shown, so there is nothing to check here.
+    showPopup({
+      key: "practice_streaks",
+      kicker: "Practice streak",
+      title: `${days} days in a row`,
+      message: "One session tomorrow keeps it alive.",
+      icon: "fire",
+      accent: category.orange,
+    });
   }
 
   async function updateProgress() {

@@ -26,6 +26,8 @@ import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
 import { sessionUser } from "../../session";
 import { sortCoursesAlphabetically } from "../../courses";
+import { notifyAndPopup } from "../../notify";
+import { practiceStreak } from "../../practiceStreak";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
 import { useContentInset } from "../../ui/layout/breakpoints";
@@ -818,7 +820,74 @@ export default function Practice() {
       setLoading(false);
       setScreen("result");
       animateResult();
+
+      // Deliberately not awaited. The result screen is what the student
+      // asked for; the streak is a remark on top of it and should never be
+      // the reason the score takes longer to appear.
+      //
+      // Caught because nothing is awaiting it: a throw inside would otherwise
+      // surface as an unhandled rejection, and a failed remark must not look
+      // like a failed session. Missing one is what the next session fixes.
+      celebrateStreak().catch(() => {});
     }, 850);
+  }
+
+  /**
+   * Congratulates a streak, once a day at most.
+   *
+   * FIRST SESSION ONLY
+   * Four sessions in an evening should not produce four identical messages,
+   * so this fires only when today's session was today's first.
+   *
+   * TWO DAYS BEFORE IT COUNTS
+   * One day is not a streak. Calling a single session a streak of one is the
+   * kind of congratulation that teaches a student to ignore the next one.
+   *
+   * The count comes from the practice attempts themselves, not from
+   * `profiles.daily_streak` — that column is incremented whenever the
+   * dashboard loads, with no gate on activity, so it measures app opens.
+   */
+  async function celebrateStreak() {
+    const user = await sessionUser();
+
+    if (!user) return;
+
+    const { days, firstToday } = await practiceStreak(user.id);
+
+    if (!firstToday || days < 2) return;
+
+    const title = `${days} days in a row`;
+    const message = "One session tomorrow keeps it alive.";
+
+    // Written to the notifications list as well as shown, so a streak reached
+    // on a day the popup is missed is still there afterwards. The other two
+    // triggers do the same; this one was written before `notify_me()` existed.
+    //
+    // 20 hours rather than 24: `firstToday` already means at most one of these
+    // a day, and a window of a full day could collide with itself across a
+    // late session and an early one. The dedupe is the second guard, not the
+    // first.
+    //
+    // The Practice streaks toggle is checked inside `showPopup`, so there is
+    // nothing to check here — and deliberately NOT checked before the row is
+    // written, because a muted category still belongs in the list.
+    await notifyAndPopup(
+      {
+        type: "practice_streak",
+        title,
+        message,
+        actionUrl: "/practice",
+        dedupeHours: 20,
+      },
+      {
+        key: "practice_streaks",
+        kicker: "Practice streak",
+        title,
+        message,
+        icon: "fire",
+        accent: category.orange,
+      },
+    );
   }
 
   async function updateProgress() {

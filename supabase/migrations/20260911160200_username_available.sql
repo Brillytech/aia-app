@@ -50,5 +50,10 @@ $$;
 
 -- Both callers — complete-profile and edit-profile — are signed in, so `anon`
 -- has no reason to hold this.
-revoke all on function public.username_available(text) from public;
+--
+-- From the named role, not just PUBLIC. This originally said `revoke all ...
+-- from public`, which left Supabase's default grant to `anon` in place and the
+-- function open to anyone with the bundled key — enough to enumerate which
+-- handles are taken. See 20260911160922_leaderboard_grants_fix.sql.
+revoke execute on function public.username_available(text) from public, anon;
 grant execute on function public.username_available(text) to authenticated;

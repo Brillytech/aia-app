@@ -201,15 +201,27 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 5. Who may call what
 -- ---------------------------------------------------------------------------
--- EXECUTE is granted to PUBLIC by default on new functions, which on a Supabase
--- project means anyone holding the anon key — and that key ships inside the
--- client bundle. Revoked first, then granted only to signed-in callers.
+-- A new function in `public` arrives callable by anyone holding the anon key,
+-- and that key ships inside the client bundle. So EXECUTE is revoked first and
+-- handed back only to signed-in callers.
+--
+-- Revoking from the NAMED roles, not just PUBLIC. This block originally said
+-- `revoke all ... from public` and closed nothing: Supabase ships ALTER DEFAULT
+-- PRIVILEGES granting EXECUTE on new functions to `anon`, `authenticated` and
+-- `service_role`, and those explicit grants survive a revoke aimed at the PUBLIC
+-- pseudo-role. The statement succeeded and the functions stayed open — measured
+-- afterwards, an anonymous caller got names, departments and XP totals back.
+-- 20260911160922_leaderboard_grants_fix.sql closed it on the live database;
+-- this is corrected so a fresh environment never opens it.
 --
 -- `leaderboard_totals` is granted to nobody: it is an implementation detail of
 -- the two functions above, and they reach it as the owner.
-revoke all on function public.leaderboard_totals(text, timestamptz) from public;
-revoke all on function public.leaderboard(text, timestamptz, int, int) from public;
-revoke all on function public.my_leaderboard_rank(text, timestamptz) from public;
+revoke execute on function public.leaderboard_totals(text, timestamptz)
+  from public, anon, authenticated;
+revoke execute on function public.leaderboard(text, timestamptz, int, int)
+  from public, anon;
+revoke execute on function public.my_leaderboard_rank(text, timestamptz)
+  from public, anon;
 
 grant execute on function public.leaderboard(text, timestamptz, int, int) to authenticated;
 grant execute on function public.my_leaderboard_rank(text, timestamptz) to authenticated;

@@ -30,6 +30,7 @@ import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
+import { ModeBar, ModeOptions, ModeSheet, type ModeOption, type StudyMode } from "../../ui/ModeSheet";
 import { Segmented } from "../../ui/Segmented";
 import { marksFor, ratingFraction, scoreTopic, type ScoredItem, type SelfCheck } from "../../theoryScore";
 import { GridQuestion, gradeGrid, isSupportedGrid, type GridAnswers } from "../../ui/GridQuestion";
@@ -243,7 +244,21 @@ function describeRow(table: string, row: any) {
   described.add(table);
   console.log(`[${table}] columns:`, Object.keys(row).join(", "));
 }
-const tabs = ["Topics", "Materials", "Questions", "Cards"];
+/**
+ * The study modes, as URL values.
+ *
+ * A param rather than component state so Android back and browser back
+ * work, and so a link can point at one. Real nested routes would mean
+ * lifting every piece of this screen's state out of it — the theory and
+ * grid systems alone are eight state atoms reading selectedCourse and
+ * selectedTopic — which is a refactor, not a navigation change.
+ */
+const MODES: StudyMode[] = ["materials", "questions", "cards"];
+
+function normalizeMode(value?: string | string[]): StudyMode | null {
+  const raw = String(Array.isArray(value) ? value[0] : value || "");
+  return (MODES as string[]).includes(raw) ? (raw as StudyMode) : null;
+}
 
 /** The three flashcard decks, in the order the auto-cycle already visits them. */
 const DECKS: { key: "all" | "saved" | "hard"; label: string }[] = [
@@ -820,6 +835,8 @@ export default function Study() {
     topicId?: string;
     /** Per-tap nonce from the dashboard; see `openInStudy` there. */
     t?: string;
+    /** Which mode is open. Absent means the chooser has not been answered. */
+    mode?: string;
   }>();
   /** The link this screen has already acted on. */
   const handledLinkRef = useRef<string | null>(null);
@@ -833,7 +850,10 @@ export default function Study() {
   const [loadingContent, setLoadingContent] = useState(false);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
-  const [activeTab, setActiveTab] = useState("Topics");
+  // Derived from the URL, not stored: the router is the source of truth so
+  // back works without this screen having to remember a history.
+  const mode = normalizeMode(params.mode);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const [questionIndex, setQuestionIndex] = useState(0);
   const [paper, setPaper] = useState<PaperItem[]>([]);
@@ -927,7 +947,7 @@ export default function Study() {
   // same course after backing out re-opens it, while a plain re-render with
   // unchanged params does not fight the user by yanking them back.
   const openDeepLink = useCallback(
-    async (courseId: string, topicId: string) => {
+    async (courseId: string, topicId: string, requested: StudyMode | null) => {
       const course = courses.find((item) => String(item.id) === courseId);
       if (!course) return;
 
@@ -935,7 +955,9 @@ export default function Study() {
       if (!topicId) return;
 
       const topic = loadedTopics.find((item) => String(item.id) === topicId);
-      if (topic) await openTopic(topic, course);
+      // A link that names a mode goes straight there; one that does not gets
+      // the chooser, same as tapping a row in the topic list.
+      if (topic) await openTopic(topic, course, requested);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [courses],
@@ -951,8 +973,11 @@ export default function Study() {
     if (handledLinkRef.current === signature) return;
 
     handledLinkRef.current = signature;
-    openDeepLink(courseId, topicId);
-  }, [params.courseId, params.topicId, params.t, courses, openDeepLink]);
+    openDeepLink(courseId, topicId, normalizeMode(params.mode));
+    // `params.mode` is read above, so it belongs here. Re-running is a no-op:
+    // the signature guard above is keyed on the link, not the mode, so
+    // changing mode inside the screen returns early instead of reopening it.
+  }, [params.courseId, params.topicId, params.t, params.mode, courses, openDeepLink]);
 
   // TODO: Enable this back when the app is ready for production.
   // This blocks screenshots/screen recording on Study Mode.
@@ -1121,13 +1146,91 @@ export default function Study() {
     setCourses(uniqueCourses);
     setLoadingCourses(false);
   }
+  function setMode(next: StudyMode | null) {
+    router.setParams({ mode: next ?? "" });
+  }
+
+  function pickMode(next: StudyMode) {
+    setMode(next);
+    setSheetOpen(false);
+  }
+
+  /**
+   * The cards, for both containers.
+   *
+   * Hues are not new: Materials blue, Questions yellow, Cards green are the
+   * three the topic header's stat row already uses, so the chooser inherits
+   * a mapping rather than inventing one.
+   */
+  /**
+   * How much of each mode this topic has. One expression, read by both the
+   * chooser and the header.
+   *
+   * They used to count separately and disagree. The header read
+   * `questions.length` for BOTH Questions and Cards, so two of its three
+   * numbers were always identical; and it left out `paper` — the theory and
+   * grid items — which the chooser included, so the same topic showed two
+   * different question counts one tap apart.
+   *
+   * Cards genuinely is `questions.length`: a flashcard is made from a
+   * multiple-choice question, and written answers do not become cards.
+   */
+  function modeCounts(): Record<StudyMode, number> {
+    return {
+      materials: materials.length,
+      questions: questions.length + paper.length,
+      cards: questions.length,
+    };
+  }
+
+  function modeOptions(): ModeOption[] {
+    const counts = modeCounts();
+
+    return [
+      {
+        key: "materials",
+        title: "Materials",
+        description: `Notes, slides and past papers · ${counts.materials} ${
+          counts.materials === 1 ? "item" : "items"
+        }`,
+        icon: "file-document-multiple-outline",
+        color: category.blue,
+        // Always here, never on another card. Reading the material is the
+        // first step of studying a topic, and that is true whether or not
+        // this particular topic has its material uploaded yet — a hint that
+        // moves depending on what is loaded teaches the student nothing
+        // about the order they should be working in.
+        badge: "Start here",
+      },
+      {
+        key: "questions",
+        title: "Questions",
+        description: `Multiple choice, theory and tables · ${counts.questions} ${
+          counts.questions === 1 ? "question" : "questions"
+        }`,
+        icon: "comment-question-outline",
+        color: category.yellow,
+      },
+      {
+        key: "cards",
+        title: "Cards",
+        description: `Flashcards from this topic's questions · ${counts.cards} ${
+          counts.cards === 1 ? "card" : "cards"
+        }`,
+        icon: "cards-outline",
+        color: category.green,
+      },
+    ];
+  }
+
   // Returns the topics it loaded so a deep link can chain straight into one
   // without waiting for the `topics` state to land on the next render.
   async function openCourse(course: Course): Promise<Topic[]> {
     setLoadingTopics(true);
     setSelectedCourse(course);
     setSelectedTopic(null);
-    setActiveTab("Topics");
+    setMode(null);
+    setSheetOpen(false);
     setTopics([]);
     setQuestions([]);
     setMaterials([]);
@@ -1168,12 +1271,29 @@ export default function Study() {
   }
   // `courseOverride` lets a deep link open a topic in the same tick it opened
   // the course, before `selectedCourse` has been committed by React.
-  async function openTopic(topic: Topic, courseOverride?: Course) {
+  async function openTopic(
+    topic: Topic,
+    courseOverride?: Course,
+    /**
+     * Skips the chooser and opens this mode directly.
+     *
+     * Set only by a deep link that named one — today that is the dashboard's
+     * Continue-learning hero, which is about resuming exactly where you
+     * stopped. Putting a menu in front of it would undo what it is for.
+     * Tapping a row in the topic list passes nothing and gets the chooser.
+     */
+    requestedMode?: StudyMode | null,
+  ) {
     const course = courseOverride ?? selectedCourse;
     if (!course) return;
     setLoadingContent(true);
     setSelectedTopic(topic);
-    setActiveTab("Questions");
+    // No longer forced into Questions. Two of the three ways to study a
+    // topic used to be reachable only by noticing a pill row above the
+    // content; the choice is the screen now — unless the caller already
+    // knows which one it wants.
+    setMode(requestedMode ?? null);
+    setSheetOpen(!requestedMode);
     setSelectedAnswers({});
     setQuestionIndex(0);
     setPaper([]);
@@ -1678,9 +1798,15 @@ export default function Study() {
     });
   }
   async function goBack() {
+    // Back out of a mode to the topic list before backing out of the topic.
+    if (mode) {
+      setMode(null);
+      return;
+    }
+
     if (selectedTopic) {
       setSelectedTopic(null);
-      setActiveTab("Topics");
+      setSheetOpen(false);
       setQuestions([]);
       setMaterials([]);
       setSelectedAnswers({});
@@ -1691,7 +1817,6 @@ export default function Study() {
     if (selectedCourse) {
       setSelectedCourse(null);
       setTopics([]);
-      setActiveTab("Topics");
       return;
     }
     router.back();
@@ -1728,6 +1853,7 @@ export default function Study() {
       );
     }
     const tone = selectedCourseTheme.color;
+    const inTopic = Boolean(mode && selectedTopic);
 
     return (
       <View style={styles.heroWrap}>
@@ -1736,13 +1862,16 @@ export default function Study() {
             <MaterialCommunityIcons name="chevron-left" size={26} color={theme.text} />
           </TouchableOpacity>
 
-          {/* Neutral. The count is not a status worth spending the course hue
-              on, and tinting it made a third surface carry the same colour. */}
-          <View style={[styles.statPill, { backgroundColor: theme.soft }]}>
-            <Text style={[styles.statPillText, { color: theme.muted }]}>
-              {topics.length} topics
-            </Text>
-          </View>
+          {/* How many topics the course has — a fact about the course, so it
+              belongs on the screen where the course is the subject. Inside a
+              topic it was answering a question nobody had asked. */}
+          {inTopic ? null : (
+            <View style={[styles.statPill, { backgroundColor: theme.soft }]}>
+              <Text style={[styles.statPillText, { color: theme.muted }]}>
+                {topics.length} topics
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* Editorial masthead, matching Profile. The panel used to be washed
@@ -1757,35 +1886,51 @@ export default function Study() {
           />
 
           <View style={styles.flex1}>
-            <View style={styles.mastTop}>
-              <Text style={[styles.mastTitle, { color: theme.text }]}>
-                {selectedCourse.title}
-              </Text>
+            {inTopic && selectedTopic ? (
+              <>
+                {/* The topic is the subject; the course is only where it
+                    lives. This was the other way round — the course held the
+                    masthead and the topic was a muted line beneath it, which
+                    made the one thing you had actually chosen the smallest
+                    text on the screen. */}
+                <Text style={[styles.mastKicker, { color: theme.muted }]} numberOfLines={1}>
+                  {[courseCode(selectedCourse), selectedCourse.title]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
 
-              {courseCode(selectedCourse) ? (
-                <View style={[styles.skelBadge, { backgroundColor: theme.soft }]}>
-                  <Text style={[styles.skelBadgeText, { color: theme.muted }]} numberOfLines={1}>
-                    {courseCode(selectedCourse)}
+                <Text style={[styles.mastTitle, { color: theme.text }]}>
+                  {selectedTopic.title}
+                </Text>
+              </>
+            ) : (
+              <>
+                <View style={styles.mastTop}>
+                  <Text style={[styles.mastTitle, { color: theme.text }]}>
+                    {selectedCourse.title}
                   </Text>
-                </View>
-              ) : null}
-            </View>
 
-            <Text style={[styles.mastMeta, { color: theme.muted }]}>
-              {selectedTopic
-                ? selectedTopic.title
-                : `${selectedCourse.department || "Course"} • ${selectedCourse.level || "Level"}`}
-            </Text>
+                  {courseCode(selectedCourse) ? (
+                    <View style={[styles.skelBadge, { backgroundColor: theme.soft }]}>
+                      <Text
+                        style={[styles.skelBadgeText, { color: theme.muted }]}
+                        numberOfLines={1}
+                      >
+                        {courseCode(selectedCourse)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <Text style={[styles.mastMeta, { color: theme.muted }]}>
+                  {`${selectedCourse.department || "Course"} • ${
+                    selectedCourse.level || "Level"
+                  }`}
+                </Text>
+              </>
+            )}
           </View>
         </View>
-
-        {selectedTopic && (
-          <View style={styles.contentStatsRow}>
-            <SmallStat label="Questions" value={questions.length} color={category.yellow} />
-            <SmallStat label="Materials" value={materials.length} color={category.blue} />
-            <SmallStat label="Cards" value={questions.length} color={category.green} />
-          </View>
-        )}
       </View>
     );
   }
@@ -2240,52 +2385,6 @@ export default function Study() {
       </View>
     );
   }
-  function renderTabs() {
-    if (!selectedTopic) return null;
-    return (
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tabRow}
-      >
-        {tabs.map((tab) => {
-          const active = activeTab === tab;
-          return (
-            <TouchableOpacity
-              key={tab}
-              onPress={() => setActiveTab(tab)}
-              style={[
-                styles.tabPill,
-                {
-                  backgroundColor: active
-                    ? selectedCourseTheme.color
-                    : withAlpha(selectedCourseTheme.color, isDark ? 0.14 : 0.09),
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  { color: active ? theme.onAccent : selectedCourseTheme.color },
-                ]}
-              >
-                {tab}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-    );
-  }
-  /**
-   * Multiple choice and theory are the same tab, split by format.
-   *
-   * Not a fifth pill in the tab row: four already scroll horizontally at
-   * 390px, and a fifth would push Cards off-screen — making an existing
-   * feature harder to find in order to surface a new one. The split is about
-   * what shape the answer takes, which a student should not have to decide
-   * before opening the tab, and which is what a segmented control is for.
-   */
   function renderFormatSwitch() {
     // Only when there is genuinely a choice. A topic with just one kind
     // shows no control at all, so nothing about Questions changes for the
@@ -3328,11 +3427,46 @@ export default function Study() {
     );
   }
   function renderActiveContent() {
-    if (!selectedTopic) return renderTopicList();
-    if (activeTab === "Questions") return renderQuestions();
-    if (activeTab === "Materials") return renderMaterials();
-    if (activeTab === "Cards") return renderQuickCards();
+    // No mode chosen yet means the chooser is the screen, and the topic
+    // list stays underneath it.
+    if (!selectedTopic || !mode) return renderTopicList();
+    if (mode === "questions") return renderQuestions();
+    if (mode === "materials") return renderMaterials();
+    if (mode === "cards") return renderQuickCards();
     return renderTopicList();
+  }
+
+  /**
+   * The phone's mode switcher.
+   *
+   * Desktop does not need one — its cards sit where the tab row was and
+   * stay put. A phone has nowhere to put them, so this reopens the sheet:
+   * one tap, rather than backing out to the topic list and hunting for the
+   * row again.
+   */
+  /**
+   * The line between the header and the content.
+   *
+   * Replaces the three-stat row that used to sit under the masthead. That
+   * row listed all three modes at once, which the chooser had just done one
+   * tap earlier, and said nothing about which one you were now looking at.
+   */
+  function renderModeRule() {
+    if (!mode || !selectedTopic) return null;
+
+    const option = modeOptions().find((item) => item.key === mode);
+    if (!option) return null;
+
+    return (
+      <ModeBar
+        theme={theme}
+        title={option.title}
+        icon={option.icon}
+        color={option.color}
+        count={modeCounts()[mode]}
+        onSwitch={wide ? undefined : () => setSheetOpen(true)}
+      />
+    );
   }
   return (
     <View style={[styles.screen, { backgroundColor: theme.bg }]}>
@@ -3382,7 +3516,22 @@ export default function Study() {
             }
           >
             {renderHeader()}
-            {renderTabs()}
+
+            {selectedTopic ? (
+              <View style={styles.modeRow}>
+                <ModeOptions
+                  theme={theme}
+                  options={modeOptions()}
+                  active={mode}
+                  layout="row"
+                  onPick={pickMode}
+                />
+              </View>
+            ) : null}
+
+            {/* Below the cards here, above the content there: either way it
+                is the line the content hangs off. */}
+            {renderModeRule()}
             {renderActiveContent()}
           </SplitPane>
         ) : null}
@@ -3393,13 +3542,33 @@ export default function Study() {
             {!selectedCourse && renderCourseList("tiles")}
             {selectedCourse && (
               <>
-                {renderTabs()}
+                {renderModeRule()}
                 {renderActiveContent()}
               </>
             )}
           </>
         ) : null}
       </ScrollView>
+
+      {/* Phone only. On desktop the cards are already on the page, and a
+          bottom sheet over a two-pane layout reads as a phone pattern
+          borrowed badly. */}
+      <ModeSheet
+        theme={theme}
+        visible={sheetOpen && !wide && Boolean(selectedTopic)}
+        topicTitle={selectedTopic?.title}
+        courseCode={selectedCourse ? courseCode(selectedCourse) : null}
+        options={modeOptions()}
+        onPick={pickMode}
+        onClose={() => {
+          setSheetOpen(false);
+          // Dismissing is "not this topic after all", so the header stops
+          // claiming one is open — unless a mode is already showing, in
+          // which case this was the switcher and nothing should move.
+          if (!mode) goBack();
+        }}
+      />
+
       {renderMaterialViewer()}
       <AlertModal
         theme={theme}
@@ -3411,22 +3580,6 @@ export default function Study() {
         onPrimary={closeAlert}
         onRequestClose={closeAlert}
       />
-    </View>
-  );
-}
-function SmallStat({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
-  return (
-    <View style={styles.smallStat}>
-      <Text style={[styles.smallStatValue, { color }]}>{value}</Text>
-      <Text style={styles.smallStatLabel}>{label}</Text>
     </View>
   );
 }
@@ -3610,54 +3763,31 @@ const styles = StyleSheet.create({
   mastTitle: {
     ...typeScale.display,
   },
+  /** The course, above the topic it belongs to. */
+  mastKicker: {
+    ...typeScale.kicker,
+    textTransform: "uppercase",
+    marginBottom: spacing.xs,
+  },
   mastMeta: {
     ...typeScale.body,
     fontWeight: weight.regular,
     marginTop: spacing.xs,
   },
-  contentStatsRow: {
-    flexDirection: "row",
-    gap: spacing.md,
-    marginTop: spacing.lg,
+  /** Desktop: where the tab pills were. */
+  modeRow: {
+    marginTop: spacing.xl,
+    marginBottom: spacing.xl,
   },
+
+
   courseTitle: {
     ...typeScale.bodyLg,
     fontWeight: weight.semi,
     marginTop: spacing.xxs,
   },
-  smallStat: {
-    flex: 1,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    padding: 10,
-  },
-  smallStatValue: {
-    fontSize: 17,
-    fontWeight: "900",
-  },
-  smallStatLabel: {
-    marginTop: 2,
-    fontSize: 10,
-    fontWeight: "800",
-    color: "rgba(248,244,234,0.65)",
-  },
-  tabRow: {
-    gap: 10,
-    paddingBottom: 18,
-  },
   flex1: {
     flex: 1,
-  },
-  tabPill: {
-    height: 44,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.pill,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tabText: {
-    ...typeScale.body,
-    fontWeight: weight.semi,
   },
   // Table of contents: rules, not surfaces.
   // --- loading skeletons -----------------------------------------------

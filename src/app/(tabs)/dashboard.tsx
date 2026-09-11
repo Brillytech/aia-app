@@ -209,7 +209,20 @@ export default function Dashboard() {
    * the same course a second time would then do nothing at all. A per-tap
    * value makes every tap a distinct navigation.
    */
-  function openInStudy(courseId?: string | null, topicId?: string | null) {
+  function openInStudy(
+    courseId?: string | null,
+    topicId?: string | null,
+    /**
+     * Which study mode to land in, skipping the chooser.
+     *
+     * Only the Continue-learning hero passes this. Opening a topic from the
+     * topic list is a "what do I want to do with this" moment and gets the
+     * chooser; the hero is specifically about resuming where you stopped, so
+     * putting a menu in front of it would undo what it is for. The caller
+     * names the intent because only the caller knows it.
+     */
+    mode?: string,
+  ) {
     haptics.tap();
 
     router.push({
@@ -217,6 +230,7 @@ export default function Dashboard() {
       params: {
         courseId: courseId || "",
         topicId: topicId || "",
+        mode: mode || "",
         t: String(Date.now()),
       },
     } as any);
@@ -1483,7 +1497,7 @@ export default function Dashboard() {
               onPress={() =>
                 openCourseWithFolder(nextCourse?.id ? String(nextCourse.id) : "hero", () =>
                   hasContent && nextTopic
-                    ? openInStudy(nextTopic.course_id, nextTopic.id)
+                    ? openInStudy(nextTopic.course_id, nextTopic.id, "questions")
                     : router.push("/study" as any),
                 )
               }
@@ -1576,7 +1590,7 @@ export default function Dashboard() {
   onPress={() =>
     openCourseWithFolder(nextCourse?.id ? String(nextCourse.id) : "hero", () =>
       hasContent && nextTopic
-        ? openInStudy(nextTopic.course_id, nextTopic.id)
+        ? openInStudy(nextTopic.course_id, nextTopic.id, "questions")
         : router.push("/study" as any),
     )
   }

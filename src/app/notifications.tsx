@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -106,6 +107,71 @@ function formatDate(value?: string | null) {
   if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
 
   return date.toLocaleDateString();
+}
+
+/**
+ * Where a notification is allowed to send you.
+ *
+ * An allow-list, not a pass-through. `action_url` is written by the admin app
+ * and stored as free text; the screen used to push anything starting with a
+ * slash straight into the router, so a typo or a renamed route navigated to
+ * nothing and left the student on a dead screen.
+ *
+ * `/dashboard` is deliberately NOT here. It is where the app already opens, so
+ * sending someone there is indistinguishable from dismissing the notification
+ * — which is exactly what the one row in the table does today: a welcome
+ * message pointing at `/dashboard`, which reads as a broken tap. A
+ * notification that wants the dashboard wants nothing in particular, and
+ * should not offer a tap at all.
+ */
+const DESTINATIONS = new Set([
+  "/study",
+  "/practice",
+  "/exam",
+  "/past-questions",
+  "/leaderboard",
+  "/profile",
+  "/premium",
+  "/settings",
+  "/aia-tutorial",
+]);
+
+/** Falls back to the category when no usable link was written. */
+function destinationForType(type?: string | null): string | null {
+  const clean = String(type || "").toLowerCase();
+
+  if (clean.includes("practice")) return "/practice";
+  if (clean.includes("exam")) return "/exam";
+  if (clean.includes("material")) return "/study";
+  if (clean.includes("study")) return "/study";
+  if (clean.includes("rank") || clean.includes("leaderboard")) return "/leaderboard";
+
+  return null;
+}
+
+type Destination = { href: string; external: boolean };
+
+/**
+ * The one place that decides whether a notification is tappable.
+ *
+ * Both the chevron and the press handler read this, so a row cannot advertise
+ * a tap that does nothing — which was the other half of the complaint: an
+ * external `https://` link failed the `startsWith("/")` check and was silently
+ * ignored, while the chevron beside it still said there was somewhere to go.
+ */
+function destinationFor(item: NotificationItem): Destination | null {
+  const raw = String(item.action_url || "").trim();
+
+  if (/^https?:\/\//i.test(raw)) return { href: raw, external: true };
+
+  if (raw.startsWith("/")) {
+    const route = raw.split("?")[0].replace(/\/+$/, "");
+    if (DESTINATIONS.has(route)) return { href: raw, external: false };
+  }
+
+  const byType = destinationForType(item.type);
+
+  return byType ? { href: byType, external: false } : null;
 }
 
 function getNotificationIcon(type?: string | null): IconName {
@@ -420,11 +486,19 @@ export default function NotificationsPage() {
   async function openNotification(item: NotificationItem) {
     if (!isRead(item)) await markAsRead(item);
 
-    if (!item.action_url) return;
+    const destination = destinationFor(item);
+    if (!destination) return;
 
-    if (item.action_url.startsWith("/")) {
-      router.push(item.action_url as any);
+    if (destination.external) {
+      // Was silently dropped. A link to a form or an announcement page is a
+      // reasonable thing for an announcement to carry.
+      Linking.openURL(destination.href).catch((error) => {
+        console.log("NOTIFICATION LINK ERROR:", error);
+      });
+      return;
     }
+
+    router.push(destination.href as any);
   }
 
   if (loading) {
@@ -550,7 +624,7 @@ export default function NotificationsPage() {
                     label={item.title}
                     secondary={item.message}
                     value={formatDate(item.created_at)}
-                    chevron={Boolean(item.action_url)}
+                    chevron={Boolean(destinationFor(item))}
                     accessory={
                       read ? undefined : (
                         <View
@@ -602,7 +676,7 @@ export default function NotificationsPage() {
                   label={item.title}
                   secondary={item.message}
                   value={formatDate(item.created_at)}
-                  chevron={Boolean(item.action_url)}
+                  chevron={Boolean(destinationFor(item))}
                   accessory={
                     read ? undefined : (
                       <View

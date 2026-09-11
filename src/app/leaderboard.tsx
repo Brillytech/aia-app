@@ -2,7 +2,6 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Image,
   Pressable,
   StyleSheet,
@@ -16,6 +15,7 @@ import { Row, Rows } from "../ui/Rows";
 import { PageHeader } from "../ui/PageHeader";
 import { useBreakpoint } from "../ui/layout/breakpoints";
 import { Screen } from "../ui/Screen";
+import { SkeletonBar } from "../ui/Skeleton";
 import { Segmented } from "../ui/Segmented";
 import { layout, radius, spacing, type, weight, withAlpha } from "../ui/tokens";
 
@@ -123,6 +123,13 @@ export default function LeaderboardPage() {
   const [leaders, setLeaders] = useState<LeaderboardUser[]>([]);
   const [myRank, setMyRank] = useState<LeaderboardUser | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * Separate from `loading` because your own rank is a separate question:
+   * one row about you, not a page of the board. It moves with the main load
+   * today and becomes independent the moment `my_rank()` lands, which is why
+   * the You placeholder is wired to this rather than to `loading`.
+   */
+  const [myRankLoading, setMyRankLoading] = useState(true);
 
   const [alert, setAlert] = useState({
     visible: false,
@@ -228,11 +235,25 @@ export default function LeaderboardPage() {
 
       const { data: profilesData, error: profilesError } = await supabase
         .from("profiles")
-        .select("id, username, full_name, email, department, level, avatar_url, photo_url, image_url")
+        // `photo_url` and `image_url` used to be in this list. Neither column
+        // exists on `profiles`, and PostgREST rejects the WHOLE select when one
+        // name is unknown (42703) — so this query returned nothing at all, the
+        // profile map came back empty, and every single row on the board fell
+        // through to the last fallback and read "LASU Scholar". The data was
+        // always fine: 15 of 17 profiles have a real username.
+        .select("id, username, full_name, email, department, level, avatar_url")
         .in("id", userIds);
 
+      // Fatal, not a note in the console. Without profiles the board cannot
+      // name anyone, and a page of identical placeholder names looks like
+      // working software — which is exactly why the bug above survived. The
+      // XP failure beside this one has always been treated this way.
       if (profilesError) {
         console.log("LEADERBOARD PROFILE ERROR:", profilesError.message);
+        setLeaders([]);
+        setMyRank(null);
+        showAlert("error", "Leaderboard Error", "Could not load student names right now.");
+        return;
       }
 
       const profileMap = new Map<string, any>();
@@ -244,11 +265,14 @@ export default function LeaderboardPage() {
       const ranked = userIds
         .map((userId) => {
           const profile = profileMap.get(userId);
+          // The last resort is deliberately not the app's own name. Every row
+          // reading "LASU Scholar" looked like a board full of students who had
+          // all chosen the same handle, rather than like missing data.
           const displayName =
             profile?.username ||
             profile?.full_name ||
             profile?.email?.split("@")[0] ||
-            "LASU Scholar";
+            `Student ${String(userId).slice(0, 4)}`;
 
           return {
             user_id: userId,
@@ -257,7 +281,7 @@ export default function LeaderboardPage() {
             displayName,
             department: profile?.department || null,
             level: profile?.level || null,
-            avatar_url: profile?.avatar_url || profile?.photo_url || profile?.image_url || null,
+            avatar_url: profile?.avatar_url || null,
             isMe: userId === user.id,
           };
         })
@@ -271,19 +295,10 @@ export default function LeaderboardPage() {
       setMyRank(ranked.find((item) => item.user_id === user.id) || null);
     } finally {
       setLoading(false);
+      setMyRankLoading(false);
     }
   }
 
-  if (loading) {
-    return (
-      <Screen backgroundColor={theme.bg}>
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={theme.accent} />
-          <Text style={[styles.loadingTitle, { color: theme.muted }]}>Loading leaderboard</Text>
-        </View>
-      </Screen>
-    );
-  }
 
   function renderTableHead() {
     return (
@@ -364,95 +379,113 @@ export default function LeaderboardPage() {
           style={styles.range}
         />
 
-        {podium.length > 0 ? (
-          <View style={styles.podiumBlock}>
-            <Text style={[styles.blockTitle, { color: theme.muted }]}>Top students</Text>
+        {/* Placeholders, not a spinner, and inside the same header, tabs and
+            section titles the real thing uses — so nothing on the page moves
+            when the data lands. The spinner this replaces lived on a screen of
+            its own, which meant the entire layout arrived at once. */}
+        {loading ? (
+          <>
+            <PodiumSkeleton theme={theme} />
 
-            <View style={styles.podiumRow}>
-              {podium.map((item) => (
-                <TrophyMedal key={item.user_id} item={item} theme={theme} />
-              ))}
+            <Rows theme={theme} title="Rankings">
+              {wide ? renderTableHead() : null}
+              <RankSkeleton theme={theme} wide={wide} />
+              {myRankLoading ? <YouSkeleton theme={theme} wide={wide} /> : null}
+            </Rows>
+          </>
+        ) : (
+          <>
+          {podium.length > 0 ? (
+            <View style={styles.podiumBlock}>
+              <Text style={[styles.blockTitle, { color: theme.muted }]}>Top students</Text>
+
+              <View style={styles.podiumRow}>
+                {podium.map((item) => (
+                  <TrophyMedal key={item.user_id} item={item} theme={theme} />
+                ))}
+              </View>
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        {rest.length > 0 || leaders.length === 0 ? (
-          <Rows theme={theme} title="Rankings">
-            {wide ? renderTableHead() : null}
-            {leaders.length === 0 ? (
-              <Row
-                theme={theme}
-                icon="trophy-broken"
-                label="No ranking yet"
-                chevron={false}
-              />
-            ) : (
-              // Rendered in pages. A cohort-wide board can run to thousands
-              // of students, and mounting every row at once is what makes a
-              // leaderboard janky long before the data layer gives up.
-              rest.slice(0, visibleCount).map((item) => {
-                const color = getRankColor(item.rank);
+          {rest.length > 0 || leaders.length === 0 ? (
+            <Rows theme={theme} title="Rankings">
+              {wide ? renderTableHead() : null}
+              {leaders.length === 0 ? (
+                <Row
+                  theme={theme}
+                  icon="trophy-broken"
+                  label="No ranking yet"
+                  chevron={false}
+                />
+              ) : (
+                // Rendered in pages. A cohort-wide board can run to thousands
+                // of students, and mounting every row at once is what makes a
+                // leaderboard janky long before the data layer gives up.
+                rest.slice(0, visibleCount).map((item) => {
+                  const color = getRankColor(item.rank);
 
-                if (wide) return renderTableRow(item, Boolean(item.isMe));
+                  if (wide) return renderTableRow(item, Boolean(item.isMe));
 
-                return (
-                  <Row
-                    key={item.user_id}
-                    theme={theme}
-                    leading={
-                      <View style={styles.rankLead}>
-                        <Text style={[styles.rankNumber, { color: theme.muted }]}>
-                          {item.rank}
-                        </Text>
-                        <Avatar user={item} size={AVATAR} />
-                      </View>
-                    }
-                    label={item.displayName}
-                    secondary={`${item.department || "LASU Scholar"} • ${item.level || "Student"}`}
-                    value={`${formatXp(item.xp)} XP`}
-                    chevron={false}
-                    style={item.isMe ? { backgroundColor: withAlpha(color, 0.1) } : undefined}
-                  />
-                );
-              })
-            )}
+                  return (
+                    <Row
+                      key={item.user_id}
+                      theme={theme}
+                      leading={
+                        <View style={styles.rankLead}>
+                          <Text style={[styles.rankNumber, { color: theme.muted }]}>
+                            {item.rank}
+                          </Text>
+                          <Avatar user={item} size={AVATAR} />
+                        </View>
+                      }
+                      label={item.displayName}
+                      secondary={describeStudent(item)}
+                      value={`${formatXp(item.xp)} XP`}
+                      chevron={false}
+                      style={item.isMe ? { backgroundColor: withAlpha(color, 0.1) } : undefined}
+                    />
+                  );
+                })
+              )}
 
-            {rest.length > visibleCount ? (
-              <Row
-                theme={theme}
-                label="Show more"
-                value={`${rest.length - visibleCount} more`}
-                onPress={() => setVisibleCount((n) => n + PAGE_SIZE)}
-              />
-            ) : null}
+              {rest.length > visibleCount ? (
+                <Row
+                  theme={theme}
+                  label="Show more"
+                  value={`${rest.length - visibleCount} more`}
+                  onPress={() => setVisibleCount((n) => n + PAGE_SIZE)}
+                />
+              ) : null}
 
-            {/* Replaces the strip that used to be pinned across the bottom of
-                the screen. That bar covered content on every scroll and
-                repeated a row the list already had whenever you were in the
-                top few. Your position now joins the list itself — appended
-                with a gap when you rank below the visible window, so it is
-                still one tap away without permanently costing a band of the
-                screen. */}
-            {myRank && !myRankVisible ? (
-              wide ? renderTableRow(myRank, true, "You") : <Row
-                theme={theme}
-                leading={
-                  <View style={styles.rankLead}>
-                    <Text style={[styles.rankNumber, { color: theme.accent }]}>
-                      {myRank.rank}
-                    </Text>
-                    <Avatar user={myRank} size={AVATAR} />
-                  </View>
-                }
-                label="You"
-                secondary={`${rangeLabel} · ${formatRank(myRank.rank)} of ${leaders.length}`}
-                value={`${formatXp(myRank.xp)} XP`}
-                chevron={false}
-                style={{ backgroundColor: withAlpha(theme.accent, 0.1) }}
-              />
-            ) : null}
-          </Rows>
-        ) : null}
+              {/* Replaces the strip that used to be pinned across the bottom of
+                  the screen. That bar covered content on every scroll and
+                  repeated a row the list already had whenever you were in the
+                  top few. Your position now joins the list itself — appended
+                  with a gap when you rank below the visible window, so it is
+                  still one tap away without permanently costing a band of the
+                  screen. */}
+              {myRank && !myRankVisible ? (
+                wide ? renderTableRow(myRank, true, "You") : <Row
+                  theme={theme}
+                  leading={
+                    <View style={styles.rankLead}>
+                      <Text style={[styles.rankNumber, { color: theme.accent }]}>
+                        {myRank.rank}
+                      </Text>
+                      <Avatar user={myRank} size={AVATAR} />
+                    </View>
+                  }
+                  label="You"
+                  secondary={`${rangeLabel} · ${formatRank(myRank.rank)}`}
+                  value={`${formatXp(myRank.xp)} XP`}
+                  chevron={false}
+                  style={{ backgroundColor: withAlpha(theme.accent, 0.1) }}
+                />
+              ) : null}
+            </Rows>
+          ) : null}
+          </>
+        )}
       </PageHeader>
 
       <AlertModal
@@ -503,6 +536,183 @@ function Avatar({ user, size = AVATAR }: { user: LeaderboardUser; size?: number 
  * without a label, and putting the position on the cup and the XP on the
  * plinth makes the award itself carry the numbers, the way a real one does.
  */
+/**
+ * The second line of a ranking row.
+ *
+ * Was `${department || "LASU Scholar"} • ${level || "Student"}`, which put the
+ * app's name where a department belongs whenever one was missing. Missing
+ * parts are now dropped rather than substituted.
+ */
+function describeStudent(item: LeaderboardUser) {
+  const parts = [item.department, item.level].filter(Boolean);
+
+  return parts.length ? parts.join(" • ") : "Student";
+}
+
+/**
+ * The podium, before it has anyone on it.
+ *
+ * Same three footprints at the same two sizes, with ranks two and three
+ * already standing lower — so the silhouette that arrives is the silhouette
+ * that was there, and nothing moves when the names land.
+ *
+ * Winner on the LEFT, not centred. The real podium renders `leaders.slice(0,3)`
+ * in rank order, so first place is leftmost; a centred tall placeholder would
+ * have been a nicer picture of a different screen.
+ */
+function PodiumSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <View style={styles.podiumBlock}>
+      <SkeletonBar theme={theme} width={84} height={12} style={styles.skelBlockTitle} />
+
+      <View style={styles.podiumRow}>
+        {[1, 2, 3].map((rank) => {
+          const first = rank === 1;
+          const size = first ? 92 : 74;
+
+          return (
+            <View key={rank} style={[styles.medal, !first && styles.medalLower]}>
+              {/* Narrower than it is tall, so it reads as a cup rather than a
+                  tile, while still reserving the glyph's full box. */}
+              <SkeletonBar theme={theme} width={size * 0.78} height={size} rounded={22} />
+              <SkeletonBar
+                theme={theme}
+                width={54}
+                height={16}
+                rounded={radius.xs}
+                style={styles.skelPlinth}
+              />
+              <SkeletonBar
+                theme={theme}
+                width={first ? 70 : 58}
+                height={12}
+                style={styles.skelMedalName}
+              />
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+/** Widths that vary per row, so the block reads as names rather than as a grid. */
+const SKEL_NAMES = [124, 96, 142, 108, 132, 88];
+
+/**
+ * A ranking row with nothing in it yet, in whichever shape this width uses:
+ * rank, avatar, name over a second line, XP on the right — or the five table
+ * columns, at their real widths.
+ */
+function RankSkeleton({
+  theme,
+  wide,
+  rows = 6,
+}: {
+  theme: Theme;
+  wide: boolean;
+  rows?: number;
+}) {
+  return (
+    <>
+      {SKEL_NAMES.slice(0, rows).map((name, index) =>
+        wide ? (
+          <View key={index} style={styles.tableRow}>
+            <View style={{ width: COL.rank }}>
+              <SkeletonBar theme={theme} width={16} height={13} />
+            </View>
+
+            <View style={[styles.studentCell, styles.flex1]}>
+              <SkeletonBar theme={theme} width={AVATAR} height={AVATAR} />
+              <SkeletonBar theme={theme} width={name} height={13} />
+            </View>
+
+            <View style={{ width: COL.department }}>
+              <SkeletonBar theme={theme} width={index % 2 ? 120 : 152} height={12} />
+            </View>
+            <View style={{ width: COL.level }}>
+              <SkeletonBar theme={theme} width={56} height={12} />
+            </View>
+            <View style={[styles.skelXpCell, { width: COL.xp }]}>
+              <SkeletonBar theme={theme} width={48} height={13} />
+            </View>
+          </View>
+        ) : (
+          <View key={index} style={styles.skelRow}>
+            <View style={styles.rankLead}>
+              <SkeletonBar theme={theme} width={14} height={13} />
+              <SkeletonBar theme={theme} width={AVATAR} height={AVATAR} />
+            </View>
+
+            <View style={styles.flex1}>
+              <SkeletonBar theme={theme} width={name} height={14} />
+              <SkeletonBar
+                theme={theme}
+                width={index % 2 ? 132 : 156}
+                height={10}
+                style={styles.skelSecondary}
+              />
+            </View>
+
+            <SkeletonBar theme={theme} width={52} height={13} />
+          </View>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * Your own row, waiting on its own answer.
+ *
+ * Tinted like the real thing, because a plain grey row appearing where an
+ * accented one is about to land is a colour change on arrival rather than
+ * content filling in.
+ */
+function YouSkeleton({ theme, wide }: { theme: Theme; wide: boolean }) {
+  const tint = { backgroundColor: withAlpha(theme.accent, 0.1) };
+
+  if (wide) {
+    return (
+      <View style={[styles.tableRow, tint]}>
+        <View style={{ width: COL.rank }}>
+          <SkeletonBar theme={theme} width={22} height={13} />
+        </View>
+        <View style={[styles.studentCell, styles.flex1]}>
+          <SkeletonBar theme={theme} width={AVATAR} height={AVATAR} />
+          <SkeletonBar theme={theme} width={34} height={13} />
+        </View>
+        <View style={{ width: COL.department }}>
+          <SkeletonBar theme={theme} width={136} height={12} />
+        </View>
+        <View style={{ width: COL.level }}>
+          <SkeletonBar theme={theme} width={56} height={12} />
+        </View>
+        <View style={[styles.skelXpCell, { width: COL.xp }]}>
+          <SkeletonBar theme={theme} width={48} height={13} />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.skelRow, styles.skelYouRow, tint]}>
+      <View style={styles.rankLead}>
+        <SkeletonBar theme={theme} width={22} height={13} />
+        <SkeletonBar theme={theme} width={AVATAR} height={AVATAR} />
+      </View>
+
+      <View style={styles.flex1}>
+        {/* Short: this one says "You", and it always will. */}
+        <SkeletonBar theme={theme} width={34} height={14} />
+        <SkeletonBar theme={theme} width={148} height={10} style={styles.skelSecondary} />
+      </View>
+
+      <SkeletonBar theme={theme} width={52} height={13} />
+    </View>
+  );
+}
+
 function TrophyMedal({ item, theme }: { item: LeaderboardUser; theme: Theme }) {
   const color = getRankColor(item.rank);
   const first = item.rank === 1;
@@ -559,14 +769,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: layout.screenGutter,
     paddingBottom: layout.tabBarInset,
   },
-  loadingWrap: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.md,
+  // --- loading placeholders ------------------------------------------------
+  skelBlockTitle: {
+    marginLeft: spacing.xs,
+    marginBottom: spacing.sm,
   },
-  loadingTitle: {
-    ...type.body,
+  skelPlinth: {
+    // The real plinth pulls UP into the trophy glyph's own bearing. A solid
+    // bar has no bearing to pull into, so this sits below instead.
+    marginTop: spacing.xs,
+  },
+  skelMedalName: {
+    marginTop: spacing.sm,
+  },
+  /** Matches Row exactly: same direction, gap and vertical padding. */
+  skelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  skelYouRow: {
+    paddingHorizontal: spacing.sm,
+    marginHorizontal: -spacing.sm,
+    borderRadius: radius.xs,
+  },
+  skelSecondary: {
+    marginTop: spacing.xs + 2,
+  },
+  skelXpCell: {
+    alignItems: "flex-end",
   },
   range: {
     marginBottom: spacing.xxl,

@@ -17,7 +17,7 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { readSession, sessionUser } from "../../session";
 import { usePremium } from "../../premium";
-import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
+import { category, useThemeMode, type AlertType } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
@@ -430,12 +430,6 @@ export default function ProfilePage() {
 
   const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
 
-  const averageProgress = useMemo(() => {
-    if (progress.length === 0) return 0;
-
-    const total = progress.reduce((sum, item) => sum + (item.progress_percent || 0), 0);
-    return Math.round(total / progress.length);
-  }, [progress]);
 
   const totalSeconds = useMemo(() => {
     return activityLogs.reduce((sum, item) => sum + (item.duration_seconds || 0), 0);
@@ -443,23 +437,7 @@ export default function ProfilePage() {
 
   const studyHours = totalSeconds > 0 ? (totalSeconds / 3600).toFixed(1) : "0";
 
-  const practiceAverage = useMemo(() => {
-    const practiceLogs = activityLogs.filter((item) => item.mode === "practice" && item.accuracy_percent !== null);
 
-    if (practiceLogs.length === 0) return accuracy;
-
-    const total = practiceLogs.reduce((sum, item) => sum + (item.accuracy_percent || 0), 0);
-    return Math.round(total / practiceLogs.length);
-  }, [activityLogs, accuracy]);
-
-  const examAverage = useMemo(() => {
-    const examLogs = activityLogs.filter((item) => item.mode === "exam" && item.accuracy_percent !== null);
-
-    if (examLogs.length === 0) return 0;
-
-    const total = examLogs.reduce((sum, item) => sum + (item.accuracy_percent || 0), 0);
-    return Math.round(total / examLogs.length);
-  }, [activityLogs]);
 
   if (loading) {
     return (
@@ -550,7 +528,7 @@ export default function ProfilePage() {
             divider={false}
             rail={
               <View>
-                <AnimatedSection index={3}>
+                <AnimatedSection index={2}>
                   <Rows theme={theme} title="Academic identity">
                     <Row
                       theme={theme}
@@ -581,7 +559,7 @@ export default function ProfilePage() {
                     />
                   </Rows>
                 </AnimatedSection>
-                <AnimatedSection index={4}>
+                <AnimatedSection index={3}>
                   <Rows theme={theme} title="Account">
                     <Row
                       theme={theme}
@@ -655,16 +633,6 @@ export default function ProfilePage() {
                 </View>
               </View>
             </AnimatedSection>
-            <AnimatedSection index={2}>
-              <View style={styles.progressPanel}>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>Performance</Text>
-
-                <PerformanceBar label="Accuracy" value={accuracy} color={category.green} theme={theme} />
-                <PerformanceBar label="Average Progress" value={averageProgress} color={category.orange} theme={theme} />
-                <PerformanceBar label="Practice Average" value={practiceAverage} color={category.blue} theme={theme} />
-                <PerformanceBar label="Exam Average" value={examAverage} color={category.purple} theme={theme} />
-              </View>
-            </AnimatedSection>
           </SplitPane>
         ) : (
           <>
@@ -686,17 +654,6 @@ export default function ProfilePage() {
         </AnimatedSection>
 
         <AnimatedSection index={2}>
-          <View style={styles.progressPanel}>
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>Performance</Text>
-
-            <PerformanceBar label="Accuracy" value={accuracy} color={category.green} theme={theme} />
-            <PerformanceBar label="Average Progress" value={averageProgress} color={category.orange} theme={theme} />
-            <PerformanceBar label="Practice Average" value={practiceAverage} color={category.blue} theme={theme} />
-            <PerformanceBar label="Exam Average" value={examAverage} color={category.purple} theme={theme} />
-          </View>
-        </AnimatedSection>
-
-        <AnimatedSection index={3}>
           <Rows theme={theme} title="Academic identity">
             <Row
               theme={theme}
@@ -728,7 +685,7 @@ export default function ProfilePage() {
           </Rows>
         </AnimatedSection>
 
-        <AnimatedSection index={4}>
+        <AnimatedSection index={3}>
           <Rows theme={theme} title="Account">
             <Row
               theme={theme}
@@ -935,32 +892,6 @@ export default function ProfilePage() {
   );
 }
 
-function PerformanceBar({
-  label,
-  value,
-  color,
-  theme,
-}: {
-  label: string;
-  value: number;
-  color: string;
-  theme: Theme;
-}) {
-  const safeValue = Math.max(0, Math.min(100, value || 0));
-
-  return (
-    <View style={styles.performanceRow}>
-      <View style={styles.performanceTop}>
-        <Text style={[styles.performanceLabel, { color: theme.text }]}>{label}</Text>
-        <Text style={[styles.performanceValue, { color }]}>{safeValue}%</Text>
-      </View>
-
-      <View style={[styles.performanceTrack, { backgroundColor: theme.soft }]}>
-        <View style={[styles.performanceFill, { width: `${safeValue}%`, backgroundColor: color }]} />
-      </View>
-    </View>
-  );
-}
 
 /**
  * One of the four summary numbers, on the page ground.
@@ -1116,10 +1047,6 @@ const styles = StyleSheet.create({
     width: "25%",
   },
 
-  progressPanel: {
-    marginBottom: spacing.xxl,
-  },
-
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1130,34 +1057,6 @@ const styles = StyleSheet.create({
   sectionKicker: {
     ...type.kicker,
     marginBottom: spacing.xs,
-  },
-
-  sectionTitle: type.title,
-
-  performanceRow: {
-    marginBottom: spacing.lg,
-  },
-
-  performanceTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.sm,
-  },
-
-  performanceLabel: type.bodyStrong,
-
-  performanceValue: type.bodyStrong,
-
-  performanceTrack: {
-    height: 9,
-    borderRadius: radius.pill,
-    overflow: "hidden",
-  },
-
-  performanceFill: {
-    height: "100%",
-    borderRadius: radius.pill,
   },
 
   progressNote: {

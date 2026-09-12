@@ -1487,6 +1487,27 @@ export default function Dashboard() {
                           <Stat theme={theme} size="major" value={weeklyStats.rank} label="Leaderboard rank" />
                         </View>
                       </View>
+
+                      {/* The report's only permanent entrance. Its notification arrives once
+                          a week and can be dismissed, which would otherwise put the page out
+                          of reach until the next Monday. */}
+                      <Pressable
+                        onPress={() => {
+                          haptics.tap();
+                          router.push("/weekly-report" as any);
+                        }}
+                        style={styles.weekReportLink}
+                      >
+                        <MaterialCommunityIcons
+                          name="chart-timeline-variant"
+                          size={16}
+                          color={theme.accent}
+                        />
+                        <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                          Full weekly report
+                        </Text>
+                        <MaterialCommunityIcons name="chevron-right" size={16} color={theme.accent} />
+                      </Pressable>
                   </View>
                 </AnimatedSection>
               </View>
@@ -1841,6 +1862,27 @@ export default function Dashboard() {
                   <Stat theme={theme} size="major" value={weeklyStats.rank} label="Leaderboard rank" />
                 </View>
               </View>
+
+              {/* The report's only permanent entrance. Its notification arrives once
+                  a week and can be dismissed, which would otherwise put the page out
+                  of reach until the next Monday. */}
+              <Pressable
+                onPress={() => {
+                  haptics.tap();
+                  router.push("/weekly-report" as any);
+                }}
+                style={styles.weekReportLink}
+              >
+                <MaterialCommunityIcons
+                  name="chart-timeline-variant"
+                  size={16}
+                  color={theme.accent}
+                />
+                <Text style={[styles.blockActionText, { color: theme.accent }]}>
+                  Full weekly report
+                </Text>
+                <MaterialCommunityIcons name="chevron-right" size={16} color={theme.accent} />
+              </Pressable>
           </View>
         </AnimatedSection>
 
@@ -2402,6 +2444,12 @@ const styles = StyleSheet.create({
     ...type.caption,
     fontWeight: weight.semi,
     letterSpacing: 0,
+  },
+  weekReportLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingTop: spacing.lg,
   },
   weekGrid: {
     flexDirection: "row",

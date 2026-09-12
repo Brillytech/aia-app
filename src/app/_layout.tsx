@@ -2,6 +2,8 @@ import { router, Stack } from "expo-router";
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { dismissPopup, popExternalNotification, useNotificationPopup } from "../notify";
+import { maybeNudgeStudy } from "../studyReminder";
+import { maybeOfferWeeklyReport } from "../weeklyReport";
 import { useInstallPrompt } from "../pwa/useInstallPrompt";
 import { useServiceWorker } from "../pwa/useServiceWorker";
 import { useThemeMode } from "../theme";
@@ -53,12 +55,30 @@ export default function RootLayout() {
    */
   const popup = useNotificationPopup();
 
-  // Announcements, and anything else written outside this device. Everything
-  // the app creates itself pops from the value it just created, so this is the
-  // only path that has to go and look.
+  /**
+   * The three things that can want the screen the moment the app opens.
+   *
+   * ONE AT MOST. On a Monday morning with nothing done yet and an unread
+   * announcement, all three qualify — and three sheets in a row is not a
+   * greeting, it is an obstacle course. Each check reports whether it showed
+   * anything and the rest are skipped, so the later ones keep their state
+   * intact and fire on a subsequent open instead of being spent unseen.
+   *
+   * Ordered by rarity, because the rarest event has the most to say: a weekly
+   * report comes once a week, an announcement now and then, a study nudge
+   * potentially twice a day.
+   *
+   * The practice-streak popup is not here — it answers something the student
+   * just did, and arrives later in the session on its own.
+   */
   useEffect(() => {
-    popExternalNotification().catch(() => {
-      // Not worth an error surface: it will be in the list either way.
+    (async () => {
+      if (await maybeOfferWeeklyReport()) return;
+      if (await popExternalNotification()) return;
+      await maybeNudgeStudy();
+    })().catch(() => {
+      // Not worth an error surface. Anything missed is either still in the
+      // list or still true on the next open.
     });
   }, []);
 

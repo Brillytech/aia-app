@@ -254,13 +254,19 @@ function currentPopup() {
  * Async because the answer lives in AsyncStorage. Callers do not await it — the
  * popup is never the point of the action that triggered it.
  */
-export async function showPopup(payload: PopupPayload) {
+export async function showPopup(payload: PopupPayload): Promise<boolean> {
   const prefs = await readPreferences();
 
-  if (!prefs[payload.key]) return;
+  if (!prefs[payload.key]) return false;
 
   queue = [...queue, payload];
   broadcast();
+
+  // Reported back so a caller running several checks in a row can stop at
+  // the first one that lands. A muted category returns false, which is what
+  // lets the next check have the slot rather than losing it to a popup that
+  // was never shown.
+  return true;
 }
 
 export function dismissPopup() {
@@ -304,27 +310,27 @@ const WATERMARK_KEY = "lasu_scholar_popup_watermark";
  * Per device, deliberately. Two devices means two popups, which is the right
  * trade for not needing a table to store it in.
  */
-export async function popExternalNotification() {
+export async function popExternalNotification(): Promise<boolean> {
   const since = await AsyncStorage.getItem(WATERMARK_KEY);
 
   if (!since) {
     // First run starts the clock now. A new account should not be greeted by an
     // announcement written before it existed.
     await AsyncStorage.setItem(WATERMARK_KEY, new Date().toISOString());
-    return;
+    return false;
   }
 
   const rows = await fetchNotifications({ since, limit: 1 });
   const row = rows[0];
 
-  if (!row) return;
+  if (!row) return false;
 
   // Moved before the toggle check on purpose. A muted category should still
   // count as "seen", or turning it back on months later would deliver an
   // avalanche of things that happened while it was off.
   await AsyncStorage.setItem(WATERMARK_KEY, row.created_at || new Date().toISOString());
 
-  await showPopup(popupFromRow(row));
+  return showPopup(popupFromRow(row));
 }
 
 /** Only routes that exist, mirroring the rule the notifications list uses. */
@@ -334,6 +340,7 @@ const ROUTES = new Set([
   "/exam",
   "/past-questions",
   "/leaderboard",
+  "/weekly-report",
   "/profile",
   "/premium",
   "/settings",

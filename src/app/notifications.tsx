@@ -120,6 +120,7 @@ const DESTINATIONS = new Set([
   "/exam",
   "/past-questions",
   "/leaderboard",
+  "/weekly-report",
   "/profile",
   "/premium",
   "/settings",
@@ -132,6 +133,7 @@ function destinationForType(type?: string | null): string | null {
 
   if (clean.includes("practice")) return "/practice";
   if (clean.includes("exam")) return "/exam";
+  if (clean.includes("report") || clean.includes("weekly")) return "/weekly-report";
   if (clean.includes("material")) return "/study";
   if (clean.includes("study")) return "/study";
   if (clean.includes("rank") || clean.includes("leaderboard")) return "/leaderboard";

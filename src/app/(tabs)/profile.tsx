@@ -632,6 +632,19 @@ export default function ProfilePage() {
                   <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
                 </View>
               </View>
+
+              {/* The detail behind the four numbers above. Untitled and on its own,
+                  the same shape Sign Out uses — it belongs to the stats, not to the
+                  Account list, which is settings rather than learning. */}
+              <Rows theme={theme}>
+                <Row
+                  theme={theme}
+                  icon="chart-timeline-variant"
+                  label="Weekly report"
+                  secondary="Study time, questions and streak"
+                  onPress={() => router.push("/weekly-report" as any)}
+                />
+              </Rows>
             </AnimatedSection>
           </SplitPane>
         ) : (
@@ -651,6 +664,19 @@ export default function ProfilePage() {
               <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
             </View>
           </View>
+
+          {/* The detail behind the four numbers above. Untitled and on its own,
+              the same shape Sign Out uses — it belongs to the stats, not to the
+              Account list, which is settings rather than learning. */}
+          <Rows theme={theme}>
+            <Row
+              theme={theme}
+              icon="chart-timeline-variant"
+              label="Weekly report"
+              secondary="Study time, questions and streak"
+              onPress={() => router.push("/weekly-report" as any)}
+            />
+          </Rows>
         </AnimatedSection>
 
         <AnimatedSection index={2}>

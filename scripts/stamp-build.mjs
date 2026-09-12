@@ -29,6 +29,18 @@ function sha() {
     const dirty = execSync("git status --porcelain", { stdio: ["ignore", "pipe", "ignore"] })
       .toString()
       .trim();
+
+    // Name what made it dirty, in the build log. The "+" on its own says a build
+    // came from uncommitted work but not which, and an unexplained marker is one
+    // nobody acts on — which is how this one stayed permanently on, reporting a
+    // tracked CLI cache file, until someone went looking.
+    if (dirty) {
+      const lines = dirty.split("\n");
+      console.error(`[stamp] tree is dirty, ${lines.length} path(s):`);
+      for (const line of lines.slice(0, 20)) console.error(`[stamp]   ${line}`);
+      if (lines.length > 20) console.error(`[stamp]   … and ${lines.length - 20} more`);
+    }
+
     return out.toString().trim() + (dirty ? "+" : "");
   } catch {
     // Building outside a checkout is legitimate; the timestamp still identifies

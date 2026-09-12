@@ -17,13 +17,14 @@ import {
 import { supabase } from "../../../lib/supabase";
 import { readSession, sessionUser } from "../../session";
 import { usePremium } from "../../premium";
-import { category, useThemeMode, type AlertType } from "../../theme";
+import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
 import { AnimatedSection } from "../../ui/AnimatedSection";
 import { PrimaryButton } from "../../ui/Button";
 import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { Row, Rows } from "../../ui/Rows";
+import { SkeletonBar } from "../../ui/Skeleton";
 import { Stat } from "../../ui/Stat";
 import { PageHeader } from "../../ui/PageHeader";
 import { useBreakpoint, useContentInset } from "../../ui/layout/breakpoints";
@@ -439,16 +440,6 @@ export default function ProfilePage() {
 
 
 
-  if (loading) {
-    return (
-      <Screen backgroundColor={theme.bg}>
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={theme.accent} />
-          <Text style={[styles.loadingTitle, { color: theme.muted }]}>Loading profile</Text>
-        </View>
-      </Screen>
-    );
-  }
 
   return (
     <Screen backgroundColor={theme.bg}>
@@ -464,304 +455,313 @@ export default function ProfilePage() {
           </Pressable>
         }
       >
-        <AnimatedSection index={0}>
-          <View style={[styles.identitySection, wide && styles.identityWide]}>
-            {/* One rounded box for the avatar, not three. The ring and the
-                inner Card were separate radii wrapping the same 96px circle. */}
-            <Card
-              onPress={uploadProfilePicture}
-              backgroundColor={theme.accent}
-              borderColor="transparent"
-              shadowColor={theme.shadow}
-              elevationLevel={1}
-              hapticStyle="press"
-              style={styles.avatar}
-            >
-              {uploadingPhoto ? (
-                <ActivityIndicator color={theme.onAccent} />
-              ) : profile?.avatar_url ? (
-                <Image
-                  source={{ uri: profile.avatar_url }}
-                  style={styles.avatarImage}
-                  resizeMode="cover"
-                  onError={() => {
-                    setProfile((prev) => prev ? { ...prev, avatar_url: null } : prev);
-                    showAlert("warning", "Image Load Error", "The uploaded image link could not be displayed. Please try uploading again.");
-                  }}
-                />
-              ) : (
-                <Text style={[styles.avatarText, { color: theme.onAccent }]}>{initials}</Text>
-              )}
-
-              <View
-                style={[
-                  styles.cameraBadge,
-                  { backgroundColor: theme.text, borderColor: theme.card },
-                ]}
-              >
-                <MaterialCommunityIcons name="camera" size={16} color={theme.card} />
-              </View>
-            </Card>
-
-            <Text style={[styles.name, wide && styles.textStart, { color: theme.text }]}>{displayName}</Text>
-
-            <Text style={[styles.email, { color: theme.muted }]}>
-              {profile?.email || "No email available"}
-            </Text>
-
-            <View style={[styles.rolePill, { backgroundColor: theme.accentSoft }]}>
-              <MaterialCommunityIcons name="school-outline" size={16} color={theme.accent} />
-              <Text style={[styles.roleText, { color: theme.accent }]}>
-                {(profile?.role || "student").toUpperCase()}
-              </Text>
-            </View>
-          </View>
-        </AnimatedSection>
-
-        {wide ? (
-          <SplitPane
-            theme={theme}
-            // Account details follow the metrics: the page is about progress,
-            // and school/faculty/level is reference data you check, not read.
-            side="end"
-            railWidth={300}
-            divider={false}
-            rail={
-              <View>
-                <AnimatedSection index={2}>
-                  <Rows theme={theme} title="Academic identity">
-                    <Row
-                      theme={theme}
-                      label="School"
-                      value={profile?.school || "Not set"}
-                      chevron={false}
-                    />
-
-                    <Row
-                      theme={theme}
-                      label="Faculty"
-                      value={profile?.faculty || "Not set"}
-                      chevron={false}
-                    />
-
-                    <Row
-                      theme={theme}
-                      label="Department"
-                      value={profile?.department || "Not set"}
-                      chevron={false}
-                    />
-
-                    <Row
-                      theme={theme}
-                      label="Level"
-                      value={profile?.level || "Not set"}
-                      chevron={false}
-                    />
-                  </Rows>
-                </AnimatedSection>
-                <AnimatedSection index={3}>
-                  <Rows theme={theme} title="Account">
-                    <Row
-                      theme={theme}
-                      icon="account-edit-outline"
-                      label="Edit Profile"
-                      onPress={() => router.push("/edit-profile")}
-                    />
-
-                    <Row
-                      theme={theme}
-                      icon="cog-outline"
-                      label="Settings"
-                      onPress={() => router.push("/settings")}
-                    />
-
-                    <Row
-                      theme={theme}
-                      icon="lifebuoy"
-                      label="Help & Support"
-                      onPress={() => setSupportOpen(true)}
-                    />
-
-                    <Row
-                      theme={theme}
-                      icon="crown"
-                      iconColor={category.yellow}
-                      label="LASU Scholar Premium"
-                      value={isPremium ? "Premium member" : "Free"}
-                      onPress={() => router.push("/premium" as any)}
-                    />
-
-                    <Row
-                      theme={theme}
-                      icon="star-outline"
-                      label="Write a Review"
-                      onPress={openReviewPage}
-                    />
-                  </Rows>
-
-                </AnimatedSection>
-
-                {/* Separated from Account, the same way Settings does it — a
-                    destructive action should not read as the next row down. */}
-                <View style={[styles.railFooter, { borderTopColor: theme.border }]}>
-                  <Rows theme={theme}>
-                    <Row
-                      theme={theme}
-                      label="Sign Out"
-                      destructive
-                      loading={loggingOut}
-                      onPress={handleLogout}
-                    />
-                  </Rows>
-                </View>
-              </View>
-            }
-          >
-            <AnimatedSection index={1}>
-              <View style={styles.statsRow}>
-                <View style={[styles.statCell, wide && styles.statCellWide]}>
-                  <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
-                </View>
-                <View style={[styles.statCell, wide && styles.statCellWide]}>
-                  <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
-                </View>
-                <View style={[styles.statCell, wide && styles.statCellWide]}>
-                  <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
-                </View>
-                <View style={[styles.statCell, wide && styles.statCellWide]}>
-                  <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
-                </View>
-              </View>
-
-              {/* The detail behind the four numbers above. Untitled and on its own,
-                  the same shape Sign Out uses — it belongs to the stats, not to the
-                  Account list, which is settings rather than learning. */}
-              <Rows theme={theme}>
-                <Row
-                  theme={theme}
-                  icon="chart-timeline-variant"
-                  label="Weekly report"
-                  secondary="Study time, questions and streak"
-                  onPress={() => router.push("/weekly-report" as any)}
-                />
-              </Rows>
-            </AnimatedSection>
-          </SplitPane>
+        {/* Placeholders inside the real header rather than a spinner on a screen
+            of its own, which is what this was — the whole page arrived at once,
+            and nothing on screen resembled what was coming. */}
+        {loading ? (
+          <ProfileSkeleton theme={theme} />
         ) : (
           <>
-        <AnimatedSection index={1}>
-          <View style={styles.statsRow}>
-            <View style={[styles.statCell, wide && styles.statCellWide]}>
-              <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
+          <AnimatedSection index={0}>
+            <View style={[styles.identitySection, wide && styles.identityWide]}>
+              {/* One rounded box for the avatar, not three. The ring and the
+                  inner Card were separate radii wrapping the same 96px circle. */}
+              <Card
+                onPress={uploadProfilePicture}
+                backgroundColor={theme.accent}
+                borderColor="transparent"
+                shadowColor={theme.shadow}
+                elevationLevel={1}
+                hapticStyle="press"
+                style={styles.avatar}
+              >
+                {uploadingPhoto ? (
+                  <ActivityIndicator color={theme.onAccent} />
+                ) : profile?.avatar_url ? (
+                  <Image
+                    source={{ uri: profile.avatar_url }}
+                    style={styles.avatarImage}
+                    resizeMode="cover"
+                    onError={() => {
+                      setProfile((prev) => prev ? { ...prev, avatar_url: null } : prev);
+                      showAlert("warning", "Image Load Error", "The uploaded image link could not be displayed. Please try uploading again.");
+                    }}
+                  />
+                ) : (
+                  <Text style={[styles.avatarText, { color: theme.onAccent }]}>{initials}</Text>
+                )}
+
+                <View
+                  style={[
+                    styles.cameraBadge,
+                    { backgroundColor: theme.text, borderColor: theme.card },
+                  ]}
+                >
+                  <MaterialCommunityIcons name="camera" size={16} color={theme.card} />
+                </View>
+              </Card>
+
+              <Text style={[styles.name, wide && styles.textStart, { color: theme.text }]}>{displayName}</Text>
+
+              <Text style={[styles.email, { color: theme.muted }]}>
+                {profile?.email || "No email available"}
+              </Text>
+
+              <View style={[styles.rolePill, { backgroundColor: theme.accentSoft }]}>
+                <MaterialCommunityIcons name="school-outline" size={16} color={theme.accent} />
+                <Text style={[styles.roleText, { color: theme.accent }]}>
+                  {(profile?.role || "student").toUpperCase()}
+                </Text>
+              </View>
             </View>
-            <View style={[styles.statCell, wide && styles.statCellWide]}>
-              <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
+          </AnimatedSection>
+
+          {wide ? (
+            <SplitPane
+              theme={theme}
+              // Account details follow the metrics: the page is about progress,
+              // and school/faculty/level is reference data you check, not read.
+              side="end"
+              railWidth={300}
+              divider={false}
+              rail={
+                <View>
+                  <AnimatedSection index={2}>
+                    <Rows theme={theme} title="Academic identity">
+                      <Row
+                        theme={theme}
+                        label="School"
+                        value={profile?.school || "Not set"}
+                        chevron={false}
+                      />
+
+                      <Row
+                        theme={theme}
+                        label="Faculty"
+                        value={profile?.faculty || "Not set"}
+                        chevron={false}
+                      />
+
+                      <Row
+                        theme={theme}
+                        label="Department"
+                        value={profile?.department || "Not set"}
+                        chevron={false}
+                      />
+
+                      <Row
+                        theme={theme}
+                        label="Level"
+                        value={profile?.level || "Not set"}
+                        chevron={false}
+                      />
+                    </Rows>
+                  </AnimatedSection>
+                  <AnimatedSection index={3}>
+                    <Rows theme={theme} title="Account">
+                      <Row
+                        theme={theme}
+                        icon="account-edit-outline"
+                        label="Edit Profile"
+                        onPress={() => router.push("/edit-profile")}
+                      />
+
+                      <Row
+                        theme={theme}
+                        icon="cog-outline"
+                        label="Settings"
+                        onPress={() => router.push("/settings")}
+                      />
+
+                      <Row
+                        theme={theme}
+                        icon="lifebuoy"
+                        label="Help & Support"
+                        onPress={() => setSupportOpen(true)}
+                      />
+
+                      <Row
+                        theme={theme}
+                        icon="crown"
+                        iconColor={category.yellow}
+                        label="LASU Scholar Premium"
+                        value={isPremium ? "Premium member" : "Free"}
+                        onPress={() => router.push("/premium" as any)}
+                      />
+
+                      <Row
+                        theme={theme}
+                        icon="star-outline"
+                        label="Write a Review"
+                        onPress={openReviewPage}
+                      />
+                    </Rows>
+
+                  </AnimatedSection>
+
+                  {/* Separated from Account, the same way Settings does it — a
+                      destructive action should not read as the next row down. */}
+                  <View style={[styles.railFooter, { borderTopColor: theme.border }]}>
+                    <Rows theme={theme}>
+                      <Row
+                        theme={theme}
+                        label="Sign Out"
+                        destructive
+                        loading={loggingOut}
+                        onPress={handleLogout}
+                      />
+                    </Rows>
+                  </View>
+                </View>
+              }
+            >
+              <AnimatedSection index={1}>
+                <View style={styles.statsRow}>
+                  <View style={[styles.statCell, wide && styles.statCellWide]}>
+                    <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
+                  </View>
+                  <View style={[styles.statCell, wide && styles.statCellWide]}>
+                    <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
+                  </View>
+                  <View style={[styles.statCell, wide && styles.statCellWide]}>
+                    <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
+                  </View>
+                  <View style={[styles.statCell, wide && styles.statCellWide]}>
+                    <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
+                  </View>
+                </View>
+
+                {/* The detail behind the four numbers above. Untitled and on its own,
+                    the same shape Sign Out uses — it belongs to the stats, not to the
+                    Account list, which is settings rather than learning. */}
+                <Rows theme={theme}>
+                  <Row
+                    theme={theme}
+                    icon="chart-timeline-variant"
+                    label="Weekly report"
+                    secondary="Study time, questions and streak"
+                    onPress={() => router.push("/weekly-report" as any)}
+                  />
+                </Rows>
+              </AnimatedSection>
+            </SplitPane>
+          ) : (
+            <>
+          <AnimatedSection index={1}>
+            <View style={styles.statsRow}>
+              <View style={[styles.statCell, wide && styles.statCellWide]}>
+                <Stat theme={theme} size="major" value={String(totalXp)} label="XP" />
+              </View>
+              <View style={[styles.statCell, wide && styles.statCellWide]}>
+                <Stat theme={theme} size="major" value={`${accuracy}%`} label="Accuracy" />
+              </View>
+              <View style={[styles.statCell, wide && styles.statCellWide]}>
+                <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
+              </View>
+              <View style={[styles.statCell, wide && styles.statCellWide]}>
+                <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
+              </View>
             </View>
-            <View style={[styles.statCell, wide && styles.statCellWide]}>
-              <Stat theme={theme} size="major" value={`${studyHours}h`} label="Study Time" />
-            </View>
-            <View style={[styles.statCell, wide && styles.statCellWide]}>
-              <Stat theme={theme} size="major" value={String(totalMaterials)} label="Materials" />
-            </View>
-          </View>
 
-          {/* The detail behind the four numbers above. Untitled and on its own,
-              the same shape Sign Out uses — it belongs to the stats, not to the
-              Account list, which is settings rather than learning. */}
-          <Rows theme={theme}>
-            <Row
-              theme={theme}
-              icon="chart-timeline-variant"
-              label="Weekly report"
-              secondary="Study time, questions and streak"
-              onPress={() => router.push("/weekly-report" as any)}
-            />
-          </Rows>
-        </AnimatedSection>
+            {/* The detail behind the four numbers above. Untitled and on its own,
+                the same shape Sign Out uses — it belongs to the stats, not to the
+                Account list, which is settings rather than learning. */}
+            <Rows theme={theme}>
+              <Row
+                theme={theme}
+                icon="chart-timeline-variant"
+                label="Weekly report"
+                secondary="Study time, questions and streak"
+                onPress={() => router.push("/weekly-report" as any)}
+              />
+            </Rows>
+          </AnimatedSection>
 
-        <AnimatedSection index={2}>
-          <Rows theme={theme} title="Academic identity">
-            <Row
-              theme={theme}
-              label="School"
-              value={profile?.school || "Not set"}
-              chevron={false}
-            />
+          <AnimatedSection index={2}>
+            <Rows theme={theme} title="Academic identity">
+              <Row
+                theme={theme}
+                label="School"
+                value={profile?.school || "Not set"}
+                chevron={false}
+              />
 
-            <Row
-              theme={theme}
-              label="Faculty"
-              value={profile?.faculty || "Not set"}
-              chevron={false}
-            />
+              <Row
+                theme={theme}
+                label="Faculty"
+                value={profile?.faculty || "Not set"}
+                chevron={false}
+              />
 
-            <Row
-              theme={theme}
-              label="Department"
-              value={profile?.department || "Not set"}
-              chevron={false}
-            />
+              <Row
+                theme={theme}
+                label="Department"
+                value={profile?.department || "Not set"}
+                chevron={false}
+              />
 
-            <Row
-              theme={theme}
-              label="Level"
-              value={profile?.level || "Not set"}
-              chevron={false}
-            />
-          </Rows>
-        </AnimatedSection>
+              <Row
+                theme={theme}
+                label="Level"
+                value={profile?.level || "Not set"}
+                chevron={false}
+              />
+            </Rows>
+          </AnimatedSection>
 
-        <AnimatedSection index={3}>
-          <Rows theme={theme} title="Account">
-            <Row
-              theme={theme}
-              icon="account-edit-outline"
-              label="Edit Profile"
-              onPress={() => router.push("/edit-profile")}
-            />
+          <AnimatedSection index={3}>
+            <Rows theme={theme} title="Account">
+              <Row
+                theme={theme}
+                icon="account-edit-outline"
+                label="Edit Profile"
+                onPress={() => router.push("/edit-profile")}
+              />
 
-            <Row
-              theme={theme}
-              icon="cog-outline"
-              label="Settings"
-              onPress={() => router.push("/settings")}
-            />
+              <Row
+                theme={theme}
+                icon="cog-outline"
+                label="Settings"
+                onPress={() => router.push("/settings")}
+              />
 
-            <Row
-              theme={theme}
-              icon="lifebuoy"
-              label="Help & Support"
-              onPress={() => setSupportOpen(true)}
-            />
+              <Row
+                theme={theme}
+                icon="lifebuoy"
+                label="Help & Support"
+                onPress={() => setSupportOpen(true)}
+              />
 
-            <Row
-              theme={theme}
-              icon="crown"
-              iconColor={category.yellow}
-              label="LASU Scholar Premium"
-              value={isPremium ? "Premium member" : "Free"}
-              onPress={() => router.push("/premium" as any)}
-            />
+              <Row
+                theme={theme}
+                icon="crown"
+                iconColor={category.yellow}
+                label="LASU Scholar Premium"
+                value={isPremium ? "Premium member" : "Free"}
+                onPress={() => router.push("/premium" as any)}
+              />
 
-            <Row
-              theme={theme}
-              icon="star-outline"
-              label="Write a Review"
-              onPress={openReviewPage}
-            />
-          </Rows>
+              <Row
+                theme={theme}
+                icon="star-outline"
+                label="Write a Review"
+                onPress={openReviewPage}
+              />
+            </Rows>
 
-          <Rows theme={theme} style={styles.signOut}>
-            <Row
-              theme={theme}
-              label="Sign Out"
-              destructive
-              loading={loggingOut}
-              onPress={handleLogout}
-            />
-          </Rows>
-        </AnimatedSection>
-          </>
+            <Rows theme={theme} style={styles.signOut}>
+              <Row
+                theme={theme}
+                label="Sign Out"
+                destructive
+                loading={loggingOut}
+                onPress={handleLogout}
+              />
+            </Rows>
+          </AnimatedSection>
+            </>
+          )}
+        </>
         )}
       </PageHeader>
 
@@ -936,6 +936,56 @@ export default function ProfilePage() {
 const AVATAR = 96;
 const CAMERA_BADGE = 34;
 
+/**
+ * Profile, before it knows who you are.
+ *
+ * The avatar, the name, the four numbers and every row below them, at the
+ * sizes they will actually be — so the page does not rearrange itself around
+ * the reader when the data lands. This replaced a centred spinner that shared
+ * nothing with the screen it was standing in for.
+ */
+function ProfileSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <>
+      <View style={styles.identitySection}>
+        <SkeletonBar theme={theme} width={AVATAR} height={AVATAR} rounded={AVATAR / 2} />
+        <SkeletonBar theme={theme} width={168} height={28} style={styles.skelName} />
+        <SkeletonBar theme={theme} width={196} height={14} style={styles.skelEmail} />
+        <SkeletonBar theme={theme} width={104} height={26} rounded={radius.pill} style={styles.skelBadge} />
+      </View>
+
+      <View style={styles.statsRow}>
+        {[0, 1, 2, 3].map((index) => (
+          <View key={index} style={styles.statCell}>
+            <SkeletonBar theme={theme} width={index % 2 ? 62 : 44} height={28} rounded={6} />
+            <SkeletonBar theme={theme} width={index % 2 ? 88 : 70} height={11} style={styles.skelStatLabel} />
+          </View>
+        ))}
+      </View>
+
+      {/* The weekly report row, then the two groups of rows below it. */}
+      {[1, 4, 5].map((rows, group) => (
+        <View key={group} style={styles.skelGroup}>
+          {group > 0 ? (
+            <SkeletonBar theme={theme} width={group === 1 ? 112 : 62} height={12} style={styles.skelGroupTitle} />
+          ) : null}
+
+          {Array.from({ length: rows }).map((_, index) => (
+            <View key={index} style={styles.skelRow}>
+              <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
+              <View style={styles.flex1}>
+                <SkeletonBar theme={theme} width={index % 2 ? 104 : 132} height={14} />
+              </View>
+              <SkeletonBar theme={theme} width={54} height={12} />
+            </View>
+          ))}
+        </View>
+      ))}
+    </>
+  );
+}
+
+
 const styles = StyleSheet.create({
   flex1: {
     flex: 1,
@@ -952,16 +1002,19 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
 
-  loadingWrap: {
-    flex: 1,
-    justifyContent: "center",
+  // --- loading placeholders ------------------------------------------------
+  skelName: { marginTop: spacing.lg },
+  skelEmail: { marginTop: spacing.sm },
+  skelBadge: { marginTop: spacing.lg },
+  skelStatLabel: { marginTop: spacing.sm },
+  skelGroup: { marginBottom: spacing.xxl },
+  skelGroupTitle: { marginBottom: spacing.md },
+  /** Matches Row: same direction, gap and vertical padding. */
+  skelRow: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: spacing.xxxl,
-  },
-
-  loadingTitle: {
-    ...type.title,
-    marginTop: spacing.lg,
+    gap: spacing.md,
+    paddingVertical: spacing.md,
   },
 
   loadingText: {

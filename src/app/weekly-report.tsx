@@ -1,30 +1,39 @@
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import Svg, { Circle } from "react-native-svg";
 import { readSession } from "../session";
-import { category, Theme, useThemeMode } from "../theme";
+import { Theme, useThemeMode } from "../theme";
 import { PageHeader } from "../ui/PageHeader";
-import { Row, Rows } from "../ui/Rows";
 import { Screen } from "../ui/Screen";
+import { Segmented } from "../ui/Segmented";
 import { SkeletonBar } from "../ui/Skeleton";
+import { Stat } from "../ui/Stat";
 import { layout, radius, spacing, type, weight, withAlpha } from "../ui/tokens";
-import { loadWeeklyReport, type DayBar, type LearningMode, type WeeklyReport } from "../weeklyReport";
+import {
+  loadWeeklyReport,
+  MODE_COLOR,
+  MODE_LABEL,
+  type DayBar,
+  type LearningMode,
+  type WeeklyReport,
+} from "../weeklyReport";
 
-/** Tall enough to make a short day legible, short enough to fit above the fold. */
-const CHART_HEIGHT = 132;
+const WEEKS = [
+  { value: "this", label: "This week" },
+  { value: "last", label: "Last week" },
+] as const;
 
-const MODE_LABEL: Record<LearningMode, string> = {
-  study: "Study",
-  practice: "Practice",
-  exam: "Exam",
-};
+type WeekKey = (typeof WEEKS)[number]["value"];
 
-/** The same hues these three modes wear everywhere else in the app. */
-const MODE_COLOR: Record<LearningMode, string> = {
-  study: category.blue,
-  practice: category.orange,
-  exam: category.red,
-};
+/** Tall enough to read a short day, short enough to keep the donut in view. */
+const CHART_HEIGHT = 120;
+
+/** Donut geometry. The stroke straddles the radius, so the box is 2r + stroke. */
+const RING = 64;
+const STROKE = 18;
+const BOX = RING * 2 + STROKE;
+const CIRCUMFERENCE = 2 * Math.PI * RING;
 
 function formatDuration(minutes: number) {
   if (minutes <= 0) return "0m";
@@ -37,107 +46,156 @@ function formatDuration(minutes: number) {
 }
 
 /**
- * How this week compares with last.
+ * How the week compares with the one before it.
  *
- * Returns null when last week was empty — "up 100%" from nothing is arithmetic,
- * not information, and a first week should read as a beginning rather than as a
- * triumph over zero.
+ * Null when the earlier week was empty — "up 100%" from nothing is arithmetic,
+ * not information, and a first week should read as a beginning.
  */
-function describeChange(thisWeek: number, lastWeek: number) {
-  if (lastWeek <= 0) return null;
+function describeChange(now: number, before: number) {
+  if (before <= 0) return null;
 
-  const delta = thisWeek - lastWeek;
-  if (delta === 0) return { text: "Same as last week", tone: "flat" as const };
+  const delta = now - before;
+  if (delta === 0) return { text: "Level with the week before", tone: "flat" as const };
 
-  const percent = Math.round((Math.abs(delta) / lastWeek) * 100);
+  const percent = Math.round((Math.abs(delta) / before) * 100);
 
   return {
-    text: `${delta > 0 ? "Up" : "Down"} ${percent}% on last week`,
+    text: `${delta > 0 ? "Up" : "Down"} ${percent}% on the week before`,
     tone: delta > 0 ? ("up" as const) : ("down" as const),
   };
 }
 
-export function Chart({ theme, days }: { theme: Theme; days: DayBar[] }) {
-  // One scale for all seven bars, so their heights are comparable. The floor of
-  // 1 keeps a week of zeroes from dividing by nothing.
-  const peak = Math.max(1, ...days.map((day) => day.minutes));
+/**
+ * Where the hours went.
+ *
+ * A ring rather than a filled pie, because the hole can carry the total — one
+ * glance then gives both the split and the size of what is being split. Drawn
+ * as three concentric circles with stroke dash offsets rather than arc paths:
+ * no trigonometry, and each segment stays one element that can be reasoned
+ * about on its own.
+ */
+export function Donut({ theme, report }: { theme: Theme; report: WeeklyReport }) {
+  const total = report.minutes;
+  const modes = (Object.keys(MODE_LABEL) as LearningMode[]).filter(
+    (mode) => report.byMode[mode] > 0,
+  );
+
+  let consumed = 0;
 
   return (
-    <View style={styles.chart}>
-      <View style={styles.bars}>
-        {days.map((day) => {
-          const height = Math.round((day.minutes / peak) * CHART_HEIGHT);
+    <View style={styles.donutRow}>
+      <View style={styles.donutWrap}>
+        <Svg width={BOX} height={BOX}>
+          {/* The track, so a thin week still reads as a ring rather than as a
+              broken drawing. */}
+          <Circle
+            cx={BOX / 2}
+            cy={BOX / 2}
+            r={RING}
+            stroke={withAlpha(theme.text, 0.08)}
+            strokeWidth={STROKE}
+            fill="none"
+          />
+
+          {modes.map((mode) => {
+            const length = (report.byMode[mode] / Math.max(1, total)) * CIRCUMFERENCE;
+            const offset = consumed;
+            consumed += length;
+
+            return (
+              <Circle
+                key={mode}
+                cx={BOX / 2}
+                cy={BOX / 2}
+                r={RING}
+                stroke={MODE_COLOR[mode]}
+                strokeWidth={STROKE}
+                fill="none"
+                strokeDasharray={`${length} ${CIRCUMFERENCE - length}`}
+                strokeDashoffset={-offset}
+                // Starts at twelve o'clock, where a reader expects a ring to
+                // begin, rather than at three.
+                transform={`rotate(-90 ${BOX / 2} ${BOX / 2})`}
+              />
+            );
+          })}
+        </Svg>
+
+        <View style={styles.donutCentre} pointerEvents="none">
+          <Text style={[styles.donutTotal, { color: theme.text }]}>{formatDuration(total)}</Text>
+          <Text style={[styles.donutCaption, { color: theme.muted }]}>total</Text>
+        </View>
+      </View>
+
+      <View style={styles.legend}>
+        {(Object.keys(MODE_LABEL) as LearningMode[]).map((mode) => {
+          const mins = report.byMode[mode];
+          const share = total > 0 ? Math.round((mins / total) * 100) : 0;
 
           return (
-            <View key={day.key} style={styles.column}>
-              <Text
-                style={[
-                  styles.barValue,
-                  { color: day.isToday ? theme.accent : theme.muted },
-                  day.minutes === 0 && styles.barValueHidden,
-                ]}
-                numberOfLines={1}
-              >
-                {day.minutes}
-              </Text>
+            <View key={mode} style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: MODE_COLOR[mode] }]} />
 
-              <View style={styles.track}>
-                <View
-                  style={[
-                    styles.fill,
-                    {
-                      height: Math.max(day.minutes > 0 ? 4 : 0, height),
-                      backgroundColor: day.isToday ? theme.accent : withAlpha(theme.text, 0.22),
-                    },
-                  ]}
-                />
+              <View style={styles.legendText}>
+                <Text style={[styles.legendLabel, { color: theme.text }]}>{MODE_LABEL[mode]}</Text>
+                <Text style={[styles.legendMeta, { color: theme.muted }]}>
+                  {formatDuration(mins)} · {share}%
+                </Text>
               </View>
-
-              <Text
-                style={[
-                  styles.barLabel,
-                  {
-                    color: day.isToday ? theme.accent : theme.muted,
-                    opacity: day.isFuture ? 0.45 : 1,
-                  },
-                ]}
-              >
-                {day.label}
-              </Text>
             </View>
           );
         })}
       </View>
-
-      <Text style={[styles.chartNote, { color: theme.muted }]}>Minutes studied, Monday to Sunday</Text>
     </View>
   );
 }
 
-export function ModeSplit({ theme, report }: { theme: Theme; report: WeeklyReport }) {
-  const total = Math.max(1, report.minutesThisWeek);
+export function Chart({ theme, days }: { theme: Theme; days: DayBar[] }) {
+  // One scale across all seven bars so their heights compare. The floor of 1
+  // keeps a week of zeroes from dividing by nothing.
+  const peak = Math.max(1, ...days.map((day) => day.minutes));
 
   return (
-    <View style={styles.split}>
-      {(Object.keys(MODE_LABEL) as LearningMode[]).map((mode) => {
-        const minutes = report.byMode[mode];
-        const share = Math.round((minutes / total) * 100);
+    <View style={styles.bars}>
+      {days.map((day) => {
+        const height = Math.round((day.minutes / peak) * CHART_HEIGHT);
 
         return (
-          <View key={mode} style={styles.splitRow}>
-            <View style={[styles.dot, { backgroundColor: MODE_COLOR[mode] }]} />
-            <Text style={[styles.splitLabel, { color: theme.text }]}>{MODE_LABEL[mode]}</Text>
+          <View key={day.key} style={styles.column}>
+            <Text
+              style={[
+                styles.barValue,
+                { color: day.isToday ? theme.accent : theme.muted },
+                day.minutes === 0 && styles.barValueHidden,
+              ]}
+              numberOfLines={1}
+            >
+              {day.minutes}
+            </Text>
 
-            <View style={[styles.splitTrack, { backgroundColor: withAlpha(theme.text, 0.08) }]}>
+            <View style={styles.track}>
               <View
                 style={[
-                  styles.splitFill,
-                  { width: `${minutes > 0 ? Math.max(2, share) : 0}%`, backgroundColor: MODE_COLOR[mode] },
+                  styles.fill,
+                  {
+                    height: Math.max(day.minutes > 0 ? 4 : 0, height),
+                    backgroundColor: day.isToday ? theme.accent : withAlpha(theme.text, 0.22),
+                  },
                 ]}
               />
             </View>
 
-            <Text style={[styles.splitValue, { color: theme.muted }]}>{formatDuration(minutes)}</Text>
+            <Text
+              style={[
+                styles.barLabel,
+                {
+                  color: day.isToday ? theme.accent : theme.muted,
+                  opacity: day.isFuture ? 0.4 : 1,
+                },
+              ]}
+            >
+              {day.label}
+            </Text>
           </View>
         );
       })}
@@ -145,73 +203,129 @@ export function ModeSplit({ theme, report }: { theme: Theme; report: WeeklyRepor
   );
 }
 
+export function Courses({ theme, report }: { theme: Theme; report: WeeklyReport }) {
+  if (report.topCourses.length === 0) return null;
+
+  const peak = Math.max(1, ...report.topCourses.map((course) => course.minutes));
+
+  return (
+    <View style={styles.block}>
+      <Text style={[styles.blockTitle, { color: theme.text }]}>Where the time went</Text>
+
+      {report.topCourses.map((course, index) => (
+        <View key={course.id} style={styles.courseRow}>
+          <View style={styles.courseTop}>
+            <Text style={[styles.courseName, { color: theme.text }]} numberOfLines={1}>
+              {course.code ? `${course.code} · ` : ""}
+              {course.title}
+            </Text>
+            <Text style={[styles.courseMins, { color: theme.muted }]}>
+              {formatDuration(course.minutes)}
+            </Text>
+          </View>
+
+          <View style={[styles.courseTrack, { backgroundColor: withAlpha(theme.text, 0.07) }]}>
+            <View
+              style={[
+                styles.courseFill,
+                {
+                  width: `${Math.max(3, Math.round((course.minutes / peak) * 100))}%`,
+                  // The busiest course wears the accent and the rest recede, so
+                  // the ranking is legible before any number is read.
+                  backgroundColor: index === 0 ? theme.accent : withAlpha(theme.text, 0.28),
+                },
+              ]}
+            />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function ReportSkeleton({ theme }: { theme: Theme }) {
-  // The bars are the page. Varying their heights keeps the placeholder from
-  // reading as a loading bar, and the column widths match the real chart so
-  // nothing shifts sideways when the data lands.
-  const heights = [58, 96, 34, 120, 72, 20, 88];
+  const heights = [54, 92, 30, 116, 68, 22, 84];
 
   return (
     <>
       <View style={styles.hero}>
-        <SkeletonBar theme={theme} width={132} height={38} rounded={8} />
-        <SkeletonBar theme={theme} width={168} height={13} style={styles.heroSkelNote} />
+        <SkeletonBar theme={theme} width={146} height={42} rounded={8} />
+        <SkeletonBar theme={theme} width={192} height={13} style={styles.heroSkelNote} />
       </View>
 
-      <View style={styles.chart}>
-        <View style={styles.bars}>
-          {heights.map((height, index) => (
-            <View key={index} style={styles.column}>
-              <View style={styles.track}>
-                <SkeletonBar theme={theme} width="100%" height={height} rounded={radius.xs} />
+      <View style={styles.donutRow}>
+        <SkeletonBar theme={theme} width={BOX} height={BOX} rounded={BOX / 2} />
+
+        <View style={styles.legend}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={styles.legendRow}>
+              <SkeletonBar theme={theme} width={10} height={10} />
+              <View style={styles.legendText}>
+                <SkeletonBar theme={theme} width={62} height={13} />
+                <SkeletonBar theme={theme} width={84} height={10} style={styles.legendSkelMeta} />
               </View>
-              <SkeletonBar theme={theme} width={26} height={10} style={styles.barLabelSkel} />
             </View>
           ))}
         </View>
       </View>
 
-      <View style={styles.split}>
-        {[0, 1, 2].map((index) => (
-          <View key={index} style={styles.splitRow}>
-            <SkeletonBar theme={theme} width={8} height={8} />
-            <SkeletonBar theme={theme} width={58} height={12} />
-            <View style={styles.splitTrack}>
-              <SkeletonBar theme={theme} width={`${70 - index * 20}%`} height={6} />
+      <View style={styles.bars}>
+        {heights.map((height, i) => (
+          <View key={i} style={styles.column}>
+            <View style={styles.track}>
+              <SkeletonBar theme={theme} width="100%" height={height} rounded={radius.xs} />
             </View>
-            <SkeletonBar theme={theme} width={38} height={12} />
+            <SkeletonBar theme={theme} width={24} height={10} style={styles.barLabelSkel} />
           </View>
         ))}
       </View>
 
-      <Rows theme={theme} title="This week">
-        {[0, 1, 2, 3, 4].map((index) => (
-          <View key={index} style={styles.statSkelRow}>
-            <SkeletonBar theme={theme} width={20} height={20} rounded={6} />
-            <View style={styles.statSkelBody}>
-              <SkeletonBar theme={theme} width={index % 2 ? 120 : 148} height={14} />
-            </View>
-            <SkeletonBar theme={theme} width={46} height={13} />
+      <View style={styles.tiles}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <View key={i} style={styles.tile}>
+            <SkeletonBar theme={theme} width={60} height={28} rounded={6} />
+            <SkeletonBar theme={theme} width={96} height={11} style={styles.tileSkelLabel} />
           </View>
         ))}
-      </Rows>
+      </View>
+
+      <View style={styles.block}>
+        <SkeletonBar theme={theme} width={152} height={18} />
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={styles.courseRow}>
+            <View style={styles.courseTop}>
+              <SkeletonBar theme={theme} width={i % 2 ? 150 : 186} height={13} />
+              <SkeletonBar theme={theme} width={44} height={11} />
+            </View>
+            <SkeletonBar theme={theme} width={`${88 - i * 22}%`} height={8} rounded={radius.pill} />
+          </View>
+        ))}
+      </View>
     </>
   );
 }
 
 export default function WeeklyReportPage() {
   const { theme } = useThemeMode();
+  const params = useLocalSearchParams<{ week?: string }>();
+
+  // The Monday notification links to ?week=last, because it is an offer to look
+  // back at a finished week rather than at one that has barely started.
+  const [week, setWeek] = useState<WeekKey>(params.week === "last" ? "last" : "this");
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (which: WeekKey) => {
     try {
+      // The session read comes first on purpose. Setting state as the very
+      // first statement of something an effect calls is a synchronous setState
+      // inside that effect, which cascades a render — React's lint rule refuses
+      // it, and rightly. Reading the session touches storage, not the network,
+      // so nothing is visibly delayed by waiting for it.
       const state = await readSession();
+      setLoading(true);
 
       // Only a confirmed signed-out state sends anyone to the login screen.
-      // "Cannot read the session right now" — offline, a cold start before the
-      // radio is up — used to arrive here as the same null and eject a student
-      // whose session was sitting intact in storage.
       if (state.status === "signed-out") {
         router.replace("/auth/login");
         return;
@@ -219,21 +333,19 @@ export default function WeeklyReportPage() {
 
       if (state.status === "unavailable") return;
 
-      const user = state.user;
-
-      setReport(await loadWeeklyReport(user.id));
+      setReport(await loadWeeklyReport(state.user.id, which === "last" ? -1 : 0));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    load(week);
+  }, [load, week]);
 
-  const change = report ? describeChange(report.minutesThisWeek, report.minutesLastWeek) : null;
+  const change = report ? describeChange(report.minutes, report.minutesBefore) : null;
   const changeColor =
-    change?.tone === "up" ? theme.success : change?.tone === "down" ? theme.muted : theme.muted;
+    change?.tone === "up" ? theme.success : change?.tone === "down" ? theme.warning : theme.muted;
 
   return (
     <Screen backgroundColor={theme.bg}>
@@ -243,74 +355,75 @@ export default function WeeklyReportPage() {
         onBack={() => router.back()}
         contentContainerStyle={styles.scroll}
       >
+        <Segmented theme={theme} value={week} options={WEEKS} onChange={setWeek} stretch />
+
         {loading ? (
           <ReportSkeleton theme={theme} />
         ) : !report ? null : report.isEmpty ? (
           <View style={styles.empty}>
-            <Text style={[styles.emptyTitle, { color: theme.text }]}>Nothing logged this week</Text>
+            <Text style={[styles.emptyTitle, { color: theme.text }]}>
+              Nothing logged {report.offset === 0 ? "this week" : "that week"}
+            </Text>
             <Text style={[styles.emptyText, { color: theme.muted }]}>
-              Study time, questions and topics all appear here once the week has something in it.
+              Study time, questions and topics all appear here once there is something to report.
             </Text>
           </View>
         ) : (
           <>
             <View style={styles.hero}>
               <Text style={[styles.heroValue, { color: theme.text }]}>
-                {formatDuration(report.minutesThisWeek)}
+                {formatDuration(report.minutes)}
               </Text>
               <Text style={[styles.heroNote, { color: changeColor }]}>
-                {change ? change.text : "Your first week on record"}
+                {change ? change.text : `${report.rangeLabel} · your first on record`}
               </Text>
             </View>
 
+            <Donut theme={theme} report={report} />
+
             <Chart theme={theme} days={report.days} />
 
-            <ModeSplit theme={theme} report={report} />
+            <View style={styles.tiles}>
+              <View style={styles.tile}>
+                <Stat theme={theme} size="major" value={report.questionsAnswered} label="Questions answered" />
+              </View>
+              <View style={styles.tile}>
+                <Stat
+                  theme={theme}
+                  size="major"
+                  value={report.accuracy === null ? "—" : `${report.accuracy}%`}
+                  label={report.accuracy === null ? "No scored sessions" : "Average score"}
+                />
+              </View>
+              <View style={styles.tile}>
+                <Stat theme={theme} size="major" value={report.xp} label="XP earned" />
+              </View>
+              <View style={styles.tile}>
+                <Stat theme={theme} size="major" value={report.streakDays} label="Day streak" />
+              </View>
+              <View style={styles.tile}>
+                <Stat theme={theme} size="major" value={report.topicsCompleted} label="Topics completed" />
+              </View>
+              <View style={styles.tile}>
+                <Stat
+                  theme={theme}
+                  size="major"
+                  value={report.bestDay ? report.bestDay.label : "—"}
+                  label={
+                    report.bestDay
+                      ? `Busiest day · ${formatDuration(report.bestDay.minutes)}`
+                      : "Busiest day"
+                  }
+                />
+              </View>
+            </View>
 
-            <Rows theme={theme} title="This week">
-              <Row
-                theme={theme}
-                icon="comment-question-outline"
-                iconColor={category.yellow}
-                label="Questions answered"
-                value={String(report.questionsAnswered)}
-                chevron={false}
-              />
-              <Row
-                theme={theme}
-                icon="target"
-                iconColor={category.green}
-                label="Average score"
-                value={report.accuracy === null ? "—" : `${report.accuracy}%`}
-                secondary={report.accuracy === null ? "No finished sessions yet" : undefined}
-                chevron={false}
-              />
-              <Row
-                theme={theme}
-                icon="star-four-points"
-                iconColor={category.purple}
-                label="XP earned"
-                value={String(report.xp)}
-                chevron={false}
-              />
-              <Row
-                theme={theme}
-                icon="fire"
-                iconColor={category.orange}
-                label="Current streak"
-                value={report.streakDays === 1 ? "1 day" : `${report.streakDays} days`}
-                secondary="Days in a row with study time"
-                chevron={false}
-              />
-              <Row
-                theme={theme}
-                icon="check-circle-outline"
-                iconColor={category.blue}
-                label="Topics completed"
-                value={String(report.topicsCompleted)}
-                chevron={false}
-              />
-            </Rows>
+            <Courses theme={theme} report={report} />
+
+            <Text style={[styles.footnote, { color: theme.muted }]}>
+              {report.sessions} {report.sessions === 1 ? "session" : "sessions"} logged. The streak
+              counts back from today, so it is the same number whichever week you are looking at.
+            </Text>
           </>
         )}
       </PageHeader>
@@ -321,128 +434,74 @@ export default function WeeklyReportPage() {
 const styles = StyleSheet.create({
   scroll: {
     // PageHeader applies no padding of its own — this style IS the content's
-    // padding, and leaving it out bled the first and last bars of the chart
-    // off both edges of the screen. Same two values every other page uses.
+    // padding, and leaving it out bled the chart off both edges of the screen.
     paddingHorizontal: layout.screenGutter,
     paddingBottom: layout.tabBarInset,
     gap: spacing.xxl,
   },
 
-  hero: {
-    gap: spacing.xs,
-  },
-  heroValue: {
-    ...type.mega,
-    fontSize: 44,
-    lineHeight: 48,
-  },
-  heroNote: {
-    ...type.body,
-    fontWeight: weight.medium,
-  },
-  heroSkelNote: {
-    marginTop: spacing.sm,
-  },
+  hero: { gap: spacing.xs },
+  heroValue: { ...type.mega, fontSize: 46, lineHeight: 50 },
+  heroNote: { ...type.body, fontWeight: weight.medium },
+  heroSkelNote: { marginTop: spacing.sm },
 
-  chart: {
-    gap: spacing.md,
-  },
-  bars: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: spacing.sm,
-  },
-  column: {
-    flex: 1,
+  // --- donut ---------------------------------------------------------------
+  donutRow: { flexDirection: "row", alignItems: "center", gap: spacing.xl },
+  donutWrap: { width: BOX, height: BOX, alignItems: "center", justifyContent: "center" },
+  donutCentre: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     alignItems: "center",
-    gap: spacing.xs,
+    justifyContent: "center",
   },
-  track: {
-    height: CHART_HEIGHT,
-    width: "100%",
-    justifyContent: "flex-end",
-  },
-  fill: {
-    width: "100%",
-    borderTopLeftRadius: radius.xs,
-    borderTopRightRadius: radius.xs,
-  },
-  barValue: {
-    ...type.micro,
-    letterSpacing: 0,
-  },
-  // Kept in the layout rather than removed, so every bar starts at the same
-  // baseline whether or not it has a number above it.
-  barValueHidden: {
-    opacity: 0,
-  },
-  barLabel: {
-    ...type.micro,
-    letterSpacing: 0.3,
-  },
-  barLabelSkel: {
-    marginTop: spacing.xs,
-  },
-  chartNote: {
-    ...type.caption,
-    fontWeight: weight.regular,
-    letterSpacing: 0,
-  },
+  donutTotal: { ...type.section },
+  donutCaption: { ...type.micro, letterSpacing: 0.4, marginTop: 1 },
+  legend: { flex: 1, minWidth: 0, gap: spacing.md },
+  legendRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  legendDot: { width: 10, height: 10, borderRadius: radius.pill },
+  legendText: { flex: 1, minWidth: 0 },
+  legendLabel: { ...type.caption, letterSpacing: 0 },
+  legendMeta: { ...type.micro, letterSpacing: 0, marginTop: 2 },
+  legendSkelMeta: { marginTop: spacing.xs },
 
-  split: {
-    gap: spacing.md,
-  },
-  splitRow: {
+  // --- day bars ------------------------------------------------------------
+  bars: { flexDirection: "row", alignItems: "flex-end", gap: spacing.sm },
+  column: { flex: 1, alignItems: "center", gap: spacing.xs },
+  track: { height: CHART_HEIGHT, width: "100%", justifyContent: "flex-end" },
+  fill: { width: "100%", borderTopLeftRadius: radius.xs, borderTopRightRadius: radius.xs },
+  barValue: { ...type.micro, letterSpacing: 0 },
+  // Kept in the layout rather than removed, so every bar shares a baseline
+  // whether or not it has a number above it.
+  barValueHidden: { opacity: 0 },
+  barLabel: { ...type.micro, letterSpacing: 0.3 },
+  barLabelSkel: { marginTop: spacing.xs },
+
+  // --- tiles ---------------------------------------------------------------
+  tiles: { flexDirection: "row", flexWrap: "wrap", rowGap: spacing.xl },
+  tile: { width: "50%" },
+  tileSkelLabel: { marginTop: spacing.sm },
+
+  // --- courses -------------------------------------------------------------
+  block: { gap: spacing.md },
+  blockTitle: { ...type.section },
+  courseRow: { gap: spacing.sm },
+  courseTop: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: spacing.md,
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: radius.pill,
-  },
-  splitLabel: {
-    ...type.caption,
-    letterSpacing: 0,
-    width: 62,
-  },
-  splitTrack: {
-    flex: 1,
-    height: 6,
-    borderRadius: radius.pill,
-    overflow: "hidden",
-  },
-  splitFill: {
-    height: "100%",
-    borderRadius: radius.pill,
-  },
-  splitValue: {
-    ...type.caption,
-    letterSpacing: 0,
-    width: 58,
-    textAlign: "right",
-  },
+  courseName: { ...type.caption, letterSpacing: 0, flex: 1, minWidth: 0 },
+  courseMins: { ...type.micro, letterSpacing: 0 },
+  courseTrack: { height: 8, borderRadius: radius.pill, overflow: "hidden" },
+  courseFill: { height: "100%", borderRadius: radius.pill },
 
-  statSkelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  statSkelBody: {
-    flex: 1,
-  },
+  footnote: { ...type.micro, letterSpacing: 0, lineHeight: 16 },
 
-  empty: {
-    gap: spacing.sm,
-    paddingVertical: spacing.xxxl,
-  },
-  emptyTitle: {
-    ...type.title,
-  },
-  emptyText: {
-    ...type.body,
-    fontWeight: weight.regular,
-  },
+  empty: { gap: spacing.sm, paddingVertical: spacing.xxxl },
+  emptyTitle: { ...type.title },
+  emptyText: { ...type.body, fontWeight: weight.regular },
 });

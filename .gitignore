@@ -47,3 +47,8 @@ example
 
 .vercel
 .env*
+
+# supabase CLI version cache - the CLI rewrites this on every run, so
+# tracking it kept `git status` permanently dirty and made the build-id
+# stamp report "+" (dirty) on every build, local and CI alike.
+supabase/.temp/cli-latest

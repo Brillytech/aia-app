@@ -24,6 +24,7 @@ import Reanimated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
+import { sessionUser } from "../../session";
 import { sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
@@ -471,8 +472,7 @@ export default function Practice() {
     setLoading(true);
     setLoadingText("Preparing practice mode...");
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) {
       setCourses([]);
@@ -822,8 +822,7 @@ export default function Practice() {
   }
 
   async function updateProgress() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
     if (!user || !selectedCourse || !selectedTopic || !isUuid(selectedCourse.id)) return;
     // Answered, not the session size. Recording questions.length meant
     // skipping every question still logged a full session's work, and it
@@ -841,8 +840,7 @@ export default function Practice() {
   }
 
   async function savePracticeAttempt() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user || !selectedCourse || !selectedTopic || !isUuid(selectedCourse.id)) return;
 

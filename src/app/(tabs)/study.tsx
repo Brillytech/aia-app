@@ -19,6 +19,7 @@ import {
   View
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
+import { sessionUser } from "../../session";
 import { courseCode, sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
 import { category, useThemeMode } from "../../theme";
@@ -998,8 +999,7 @@ export default function Study() {
   async function loadCourses() {
     setLoadingCourses(true);
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) {
       setCourses([]);
@@ -1376,8 +1376,7 @@ export default function Study() {
     setHardReviewMode(false);
   }
   async function loadCompletedTopics(courseId: string, topicList: Topic[]) {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user || !isUuid(courseId) || topicList.length === 0) {
       setCompletedTopicIds(new Set());
@@ -1425,8 +1424,7 @@ export default function Study() {
     try {
       if (!selectedCourse) return;
 
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const user = await sessionUser();
 
       if (!user || !isUuid(selectedCourse.id) || !isUuid(topic.id)) {
         showAlert("warning", "Not Available", "This topic cannot be updated yet.");
@@ -1517,8 +1515,7 @@ export default function Study() {
     quickCardRating?: FlashRating;
   }) {
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const user = await sessionUser();
       if (!user || !selectedCourse || !selectedTopic) return;
       if (!isUuid(selectedCourse.id) || !isUuid(selectedTopic.id)) return;
       await ensureDefaultGoals(user.id);
@@ -1624,8 +1621,7 @@ export default function Study() {
 
     try {
       let preparedFor: string | null = null;
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData?.user;
+      const user = await sessionUser();
 
       if (user) {
         const { data: profileRow } = await supabase

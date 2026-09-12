@@ -2,6 +2,7 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef } from "react";
 import { AppState, AppStateStatus } from "react-native";
 import { supabase } from "../lib/supabase";
+import { sessionUser } from "./session";
 
 /**
  * Wall-clock learning-time tracking for the three learning screens.
@@ -100,8 +101,7 @@ export function useScreenTime(
       if (seconds < MIN_LOGGED_SECONDS) return;
 
       try {
-        const { data: userData } = await supabase.auth.getUser();
-        const user = userData.user;
+        const user = await sessionUser();
 
         if (!user) return;
 

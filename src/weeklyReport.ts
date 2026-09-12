@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../lib/supabase";
+import { sessionUser } from "./session";
 import { localDayKey, localWeekDays, startOfLocalWeek } from "./days";
 import { showPopup } from "./notify";
 import { category } from "./theme";
@@ -233,8 +234,7 @@ export async function maybeOfferWeeklyReport(): Promise<boolean> {
   const seen = await AsyncStorage.getItem(SEEN_KEY);
   if (seen === thisWeekKey) return false;
 
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  const user = await sessionUser();
   if (!user) return false;
 
   const lastWeekStart = new Date(startOfLocalWeek());

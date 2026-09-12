@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
+import { readSession } from "../session";
 import { AlertType, category, medal, Theme, useThemeMode } from "../theme";
 import { AlertModal } from "../ui/AlertModal";
 import { Row, Rows } from "../ui/Rows";
@@ -184,13 +185,22 @@ export default function LeaderboardPage() {
     try {
       setLoading(true);
 
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const state = await readSession();
 
-      if (!user) {
+      // Only a confirmed signed-out state sends anyone to the login screen.
+      // "Cannot read the session right now" — offline, a cold start before the
+      // radio is up — used to arrive here as the same null and eject a student
+      // whose session was sitting intact in storage.
+      if (state.status === "signed-out") {
         router.replace("/auth/login");
         return;
       }
+
+      // The finally below clears loading, so the board shows its empty state
+      // and the refresh control retries.
+      if (state.status === "unavailable") return;
+
+      const user = state.user;
 
       const rangeStart = getRangeStart();
 

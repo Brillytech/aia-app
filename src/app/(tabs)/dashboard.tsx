@@ -18,6 +18,7 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 import { supabase } from "../../../lib/supabase";
+import { readSession, sessionUser } from "../../session";
 import { category, Theme, useThemeMode } from "../../theme";
 import type { IconName } from "../../ui/alerts";
 import { AnimatedSection } from "../../ui/AnimatedSection";
@@ -332,14 +333,26 @@ export default function Dashboard() {
   async function loadDashboard() {
     setLoading(true);
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const state = await readSession();
 
-    if (!user) {
+    // Only a confirmed signed-out state sends anyone to the login screen.
+    // "Cannot read the session right now" — offline, a cold start before the
+    // radio is up — used to arrive here as the same null and eject a student
+    // whose session was sitting intact in storage.
+    if (state.status === "signed-out") {
       router.replace("/auth/login");
       setLoading(false);
       return;
     }
+
+    // Nothing to show and nowhere to send them: the screen stays, and pulling
+    // to refresh tries again.
+    if (state.status === "unavailable") {
+      setLoading(false);
+      return;
+    }
+
+    const user = state.user;
 
     const { data: profileData, error: profileError } = await supabase
       .from("profiles")
@@ -530,8 +543,7 @@ export default function Dashboard() {
   }
 
   async function saveUserGoals() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) return;
 

@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../lib/supabase";
+import { sessionUser } from "../session";
 import {
   colorForType,
   DEFAULT_PREFS,
@@ -272,8 +273,7 @@ export default function NotificationsPage() {
   );
 
   async function loadReadBroadcasts() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) return;
 
@@ -301,8 +301,7 @@ export default function NotificationsPage() {
   async function persistReadBroadcasts(ids: string[]) {
     if (ids.length === 0) return;
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) return;
 
@@ -418,8 +417,7 @@ export default function NotificationsPage() {
   }
 
   async function markAllAsRead() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     setNotifications((prev) =>
       prev.map((row) => (row.user_id ? { ...row, is_read: true } : row)),

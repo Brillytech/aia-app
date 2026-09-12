@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../lib/supabase";
+import { sessionUser } from "./session";
 import { localDayKey, startOfLocalDay } from "./days";
 import { category } from "./theme";
 import { showPopup } from "./notify";
@@ -161,8 +162,7 @@ export async function maybeNudgeStudy(): Promise<boolean> {
   const ledger = await readLedger();
   if (ledger.windows.includes(window)) return false;
 
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  const user = await sessionUser();
   if (!user) return false;
 
   if (!(await isDayEmpty(user.id))) return false;

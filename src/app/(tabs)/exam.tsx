@@ -10,43 +10,37 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View
 } from "react-native";
 // Reanimated under its own name: this file already uses RN's Animated for its
 // fade/slide values, and the CSS-transition props are Reanimated-only.
-import Reanimated from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
+import { sessionUser } from "../../session";
 import { sortCoursesAlphabetically } from "../../courses";
 import { useScreenTime } from "../../screen-time";
-import { category, Theme, useThemeMode } from "../../theme";
-import { useContentInset } from "../../ui/layout/breakpoints";
-import { AlertModal } from "../../ui/AlertModal";
 import type { AlertType } from "../../theme";
-import type { IconName } from "../../ui/alerts";
-import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
-import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
-import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
+import { Theme, useThemeMode } from "../../theme";
+import { AlertModal } from "../../ui/AlertModal";
 import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
+import { useContentInset } from "../../ui/layout/breakpoints";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
+import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
+import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
 import { getGrade, HeadlineRow, HeadlineStat, ScoreHero } from "../../ui/Score";
+import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Stepper } from "../../ui/Stepper";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import {
-  layout,
   spacing,
   type as typeScale,
   weight,
-  withAlpha,
+  withAlpha
 } from "../../ui/tokens";
-import { useCollapse } from "../../ui/useCollapse";
 
 const logo = require("../../../assets/ls-logo.png");
 
@@ -370,8 +364,7 @@ export default function Exam() {
   async function loadCourses() {
     setLoading(true);
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user) {
       setCourses([]);
@@ -761,8 +754,7 @@ export default function Exam() {
   }
 
   async function saveExamAttempt() {
-    const { data: userData } = await supabase.auth.getUser();
-    const user = userData.user;
+    const user = await sessionUser();
 
     if (!user || !selectedCourse || !isUuid(selectedCourse.id)) return;
 

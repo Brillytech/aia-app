@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
+import { readSession, sessionUser } from "../../session";
 import { usePremium } from "../../premium";
 import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
 import { AlertModal } from "../../ui/AlertModal";
@@ -144,20 +145,23 @@ export default function ProfilePage() {
     try {
       setLoading(true);
 
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      // The one screen that already told a failed check apart from a signed-out
+      // user, so it keeps all three answers rather than flattening to a user or
+      // null — it just gets them from storage now instead of a round-trip.
+      const state = await readSession();
 
-      if (userError) {
-        showAlert("error", "Profile Error", userError.message);
+      if (state.status === "unavailable") {
+        showAlert("error", "Profile Error", state.reason);
         setProfile(FALLBACK_PROFILE);
         return;
       }
 
-      const user = userData.user;
-
-      if (!user) {
+      if (state.status === "signed-out") {
         setProfile(FALLBACK_PROFILE);
         return;
       }
+
+      const user = state.user;
 
       const { data, error } = await supabase
         .from("profiles")
@@ -256,8 +260,7 @@ export default function ProfilePage() {
 
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const user = await sessionUser();
 
       if (!user) {
         showAlert("error", "Not Signed In", "Please sign in again to update your profile picture.");
@@ -360,8 +363,7 @@ export default function ProfilePage() {
     try {
       setSubmittingReview(true);
 
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const user = await sessionUser();
 
       if (!user) {
         showAlert("error", "Not Signed In", "Please sign in again to submit your review.");

@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { supabase } from "../../lib/supabase";
+import { readSession } from "../session";
 import { category, Theme, useThemeMode } from "../theme";
 import { PageHeader } from "../ui/PageHeader";
 import { Row, Rows } from "../ui/Rows";
@@ -206,13 +206,20 @@ export default function WeeklyReportPage() {
 
   const load = useCallback(async () => {
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
+      const state = await readSession();
 
-      if (!user) {
+      // Only a confirmed signed-out state sends anyone to the login screen.
+      // "Cannot read the session right now" — offline, a cold start before the
+      // radio is up — used to arrive here as the same null and eject a student
+      // whose session was sitting intact in storage.
+      if (state.status === "signed-out") {
         router.replace("/auth/login");
         return;
       }
+
+      if (state.status === "unavailable") return;
+
+      const user = state.user;
 
       setReport(await loadWeeklyReport(user.id));
     } finally {

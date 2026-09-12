@@ -16,6 +16,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
+import { readSession, sessionUser } from "../session";
 import { Theme, useThemeMode } from "../theme";
 import {
   isDuplicateUsernameError,
@@ -205,8 +206,7 @@ export default function CompleteProfile() {
   }, []);
 
   async function loadUserDetails() {
-    const { data } = await supabase.auth.getUser();
-    const user = data.user;
+    const user = await sessionUser();
 
     if (!user) return;
 
@@ -255,15 +255,32 @@ export default function CompleteProfile() {
 
     setLoading(true);
 
-    const { data } = await supabase.auth.getUser();
-    const user = data.user;
+    const state = await readSession();
 
-    if (!user) {
+    // Only a confirmed signed-out state sends anyone to the login screen.
+    // "Cannot read the session right now" — offline, a cold start before the
+    // radio is up — used to arrive here as the same null and eject a student
+    // whose session was sitting intact in storage.
+    if (state.status === "signed-out") {
       setLoading(false);
       showAlert("error", "Session Expired", "Please login again.");
       router.replace("/auth/login");
       return;
     }
+
+    // A save, not a load. Telling someone their session expired when the
+    // network simply blinked would lose everything they just typed.
+    if (state.status === "unavailable") {
+      setLoading(false);
+      showAlert(
+        "error",
+        "Could not save",
+        "We could not reach the server. Check your connection and try again.",
+      );
+      return;
+    }
+
+    const user = state.user;
 
     // Re-checked at save time, not just as you type. The debounced lookup can
     // be several seconds stale by the time someone finishes the last step.

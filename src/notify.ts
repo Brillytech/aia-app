@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSyncExternalStore } from "react";
 import { supabase } from "../lib/supabase";
+import { sessionUser } from "./session";
 import { category, type Theme } from "./theme";
 import type { IconName } from "./ui/alerts";
 
@@ -151,8 +152,7 @@ export async function fetchNotifications(options?: {
   since?: string | null;
   limit?: number;
 }): Promise<NotificationRow[]> {
-  const { data: userData } = await supabase.auth.getUser();
-  const user = userData.user;
+  const user = await sessionUser();
 
   if (!user) return [];
 
@@ -271,6 +271,25 @@ export async function showPopup(payload: PopupPayload): Promise<boolean> {
 
 export function dismissPopup() {
   queue = queue.slice(1);
+  broadcast();
+}
+
+/**
+ * Drops everything queued or showing.
+ *
+ * The popup host sits ABOVE the router, which is what lets it appear over any
+ * screen — and also what let a sheet queued while signed in stay on screen
+ * after a redirect to the login page. That is how a weekly report offer ended
+ * up sitting over the sign-in form for someone who was not signed in.
+ *
+ * The weekly one carries no personal numbers. The study reminder carries your
+ * daily goal and the streak one your streak, so this closes the hole before
+ * either of those can put a real figure on a login screen.
+ */
+export function clearPopups() {
+  if (queue.length === 0) return;
+
+  queue = [];
   broadcast();
 }
 

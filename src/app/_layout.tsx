@@ -1,7 +1,8 @@
-import { router, Stack } from "expo-router";
+import { router, Stack, usePathname } from "expo-router";
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
-import { dismissPopup, popExternalNotification, useNotificationPopup } from "../notify";
+import { supabase } from "../../lib/supabase";
+import { clearPopups, dismissPopup, popExternalNotification, useNotificationPopup } from "../notify";
 import { maybeNudgeStudy } from "../studyReminder";
 import { maybeOfferWeeklyReport } from "../weeklyReport";
 import { useInstallPrompt } from "../pwa/useInstallPrompt";
@@ -54,6 +55,28 @@ export default function RootLayout() {
    * practice session, or simply opening the app.
    */
   const popup = useNotificationPopup();
+  const pathname = usePathname();
+
+  /**
+   * Nothing queued survives the session that queued it.
+   *
+   * Two triggers, because they catch different things. The auth listener
+   * handles an explicit sign-out, which may not navigate anywhere. The route
+   * check handles a screen deciding the session is gone and redirecting —
+   * that path fires no auth event at all, and it is the one that actually
+   * left a weekly report offer sitting over the login form.
+   */
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") clearPopups();
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (pathname?.startsWith("/auth")) clearPopups();
+  }, [pathname]);
 
   /**
    * The three things that can want the screen the moment the app opens.

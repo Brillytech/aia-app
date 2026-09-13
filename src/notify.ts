@@ -339,15 +339,30 @@ export async function popExternalNotification(): Promise<boolean> {
     return false;
   }
 
-  const rows = await fetchNotifications({ since, limit: 1 });
-  const row = rows[0];
+  // More than one, because the newest row may be one this app wrote itself a
+  // moment ago. Taking `limit: 1` and skipping it would mean an announcement
+  // sitting directly behind it never got its turn.
+  const rows = await fetchNotifications({ since, limit: 10 });
 
-  if (!row) return false;
+  if (rows.length === 0) return false;
 
   // Moved before the toggle check on purpose. A muted category should still
   // count as "seen", or turning it back on months later would deliver an
   // avalanche of things that happened while it was off.
-  await AsyncStorage.setItem(WATERMARK_KEY, row.created_at || new Date().toISOString());
+  //
+  // Advanced to the NEWEST row even when the popup below goes to an older one,
+  // which is the existing "one popup, not nine" rule: everything looked at here
+  // counts as looked at.
+  await AsyncStorage.setItem(WATERMARK_KEY, rows[0].created_at || new Date().toISOString());
+
+  // The double-fire trap. A trigger that calls `notifyMe()` has ALREADY shown
+  // its popup and written the row in one go; without this the next open would
+  // find that row sitting above the watermark and show the very same message a
+  // second time.
+  const own = await readSelfWritten();
+  const row = rows.find((candidate) => !own.includes(candidate.id));
+
+  if (!row) return false;
 
   return showPopup(popupFromRow(row));
 }
@@ -384,4 +399,149 @@ export function popupFromRow(row: NotificationRow): PopupPayload {
     href,
     actionLabel: href ? "Open" : undefined,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Notifications this app writes for itself
+// ---------------------------------------------------------------------------
+
+/**
+ * The `type` values `notify_me()` accepts, matching its SQL allow-list exactly.
+ *
+ * Each one lands on a preference key through `preferenceForType`, which matches
+ * on substrings — so `study_reminder` reaches `study_reminders`, and so on. A
+ * value outside this union would be governed by no toggle, which is a
+ * notification the student cannot switch off.
+ */
+export type NotifyType =
+  | "study_reminder"
+  | "practice_streak"
+  | "material_update"
+  | "weekly_report"
+  | "activity_update";
+
+/**
+ * Three answers, not two -- the same shape as `readSession`, for the same
+ * reason. "Nothing was written because it already exists" and "nothing was
+ * written because the function is not there" demand opposite responses from the
+ * caller, and collapsing them would either double-notify or go silent.
+ */
+export type NotifyResult =
+  | { status: "written"; id: string; createdAt: string }
+  | { status: "duplicate" }
+  | { status: "unavailable"; reason: string };
+
+const SELF_WRITTEN_KEY = "lasu_scholar_self_notifications";
+
+/**
+ * How many of this device's own notification ids to remember.
+ *
+ * Only needs to cover rows still above the popup watermark, which the next open
+ * moves past. Ten would do; twenty is cheap and leaves room for a burst.
+ */
+const SELF_WRITTEN_MAX = 20;
+
+async function readSelfWritten(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(SELF_WRITTEN_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    // A corrupt ledger means at worst one duplicate popup, which is a far
+    // better failure than throwing inside a trigger and losing the row.
+    return [];
+  }
+}
+
+async function rememberSelfWritten(id: string) {
+  try {
+    const existing = await readSelfWritten();
+    const next = [id, ...existing.filter((value) => value !== id)].slice(0, SELF_WRITTEN_MAX);
+
+    await AsyncStorage.setItem(SELF_WRITTEN_KEY, JSON.stringify(next));
+  } catch {
+    // Same trade as above.
+  }
+}
+
+/**
+ * Writes a notification addressed to the signed-in student, and records it so
+ * the watermark scan does not show it a second time.
+ *
+ * The recipient is never passed in -- `notify_me()` reads `auth.uid()` itself,
+ * which is what makes a client-callable insert safe. See the migration.
+ *
+ * PREFERENCES ARE NOT CHECKED HERE, DELIBERATELY.
+ * A toggle governs being INTERRUPTED, not whether the record exists. The list
+ * already shows admin-written rows of muted categories -- `fetchNotifications`
+ * has never filtered on preferences -- and a student who turns a category back
+ * on should find its history intact rather than a gap. `showPopup` remains the
+ * one place a toggle is consulted.
+ */
+export async function notifyMe(input: {
+  type: NotifyType;
+  title: string;
+  message: string;
+  /** In-app route. Validated against the allow-list when it is read back. */
+  actionUrl?: string | null;
+  /** Suppress if a row of this type exists for this user inside the window. */
+  dedupeHours?: number;
+}): Promise<NotifyResult> {
+  try {
+    const { data, error } = await supabase.rpc("notify_me", {
+      p_type: input.type,
+      p_title: input.title,
+      p_message: input.message,
+      p_action_url: input.actionUrl ?? null,
+      p_dedupe_hours: input.dedupeHours ?? 0,
+    });
+
+    if (error) return { status: "unavailable", reason: error.message };
+
+    // The function returns a set: one row when it wrote, none when the dedupe
+    // window swallowed it.
+    const row = Array.isArray(data) ? data[0] : data;
+
+    if (!row?.id) return { status: "duplicate" };
+
+    await rememberSelfWritten(String(row.id));
+
+    return {
+      status: "written",
+      id: String(row.id),
+      createdAt: String(row.created_at || new Date().toISOString()),
+    };
+  } catch (thrown: any) {
+    return { status: "unavailable", reason: String(thrown?.message || thrown) };
+  }
+}
+
+/**
+ * Write it down, then say it out loud.
+ *
+ * The single entry point every in-app trigger should use. It exists so the
+ * migration being unapplied degrades to exactly today's behaviour rather than
+ * to silence: `unavailable` still shows the popup, which is what the app did
+ * before `notify_me()` existed at all.
+ *
+ *   written     -> row is in the list, and the popup fires
+ *   duplicate   -> already handled inside the window; stay quiet
+ *   unavailable -> no list row is possible; the popup is all there is
+ */
+export async function notifyAndPopup(
+  row: {
+    type: NotifyType;
+    title: string;
+    message: string;
+    actionUrl?: string | null;
+    dedupeHours?: number;
+  },
+  popup: PopupPayload,
+): Promise<boolean> {
+  const result = await notifyMe(row);
+
+  if (result.status === "duplicate") return false;
+
+  return showPopup(popup);
 }

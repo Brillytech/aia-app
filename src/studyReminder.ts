@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { sessionUser } from "./session";
 import { localDayKey, startOfLocalDay } from "./days";
 import { category } from "./theme";
-import { showPopup } from "./notify";
+import { notifyAndPopup } from "./notify";
 
 /**
  * The nudge for a day with nothing on it yet.
@@ -168,9 +168,9 @@ export async function maybeNudgeStudy(): Promise<boolean> {
   if (!(await isDayEmpty(user.id))) return false;
   if (!(await isActiveRecently(user.id))) return false;
 
-  // Recorded before the popup, not after. `showPopup` silently does nothing when
-  // the category is switched off, and a student who has muted study reminders
-  // should not have this query run again on every open for the rest of the day.
+  // Recorded before the popup, not after. A muted category shows nothing, and
+  // a student who has muted study reminders should not have these queries run
+  // again on every open for the rest of the day.
   await AsyncStorage.setItem(
     STORAGE_KEY,
     JSON.stringify({ day: ledger.day, windows: [...ledger.windows, window] }),
@@ -178,16 +178,32 @@ export async function maybeNudgeStudy(): Promise<boolean> {
 
   const goal = await questionsGoal(user.id);
 
-  return showPopup({
-    key: "study_reminders",
-    kicker: "Study reminder",
-    title: window === "morning" ? "Nothing yet today" : "Still time today",
-    message: goal
-      ? `No questions answered yet — ${goal} would hit your daily goal.`
-      : "No questions answered yet today. A short session is enough to keep the day going.",
-    icon: "book-open-page-variant-outline",
-    accent: category.blue,
-    href: "/study",
-    actionLabel: "Open Study",
-  });
+  const title = window === "morning" ? "Nothing yet today" : "Still time today";
+  const message = goal
+    ? `No questions answered yet — ${goal} would hit your daily goal.`
+    : "No questions answered yet today. A short session is enough to keep the day going.";
+
+  // Written to the list as well as shown, so a nudge missed in the moment is
+  // still there later. The dedupe window is the gap between the two windows:
+  // morning ends at 12 and afternoon starts at 16, so four hours cannot suppress
+  // the afternoon nudge but a second morning one has no room to appear.
+  return notifyAndPopup(
+    {
+      type: "study_reminder",
+      title,
+      message,
+      actionUrl: "/study",
+      dedupeHours: 4,
+    },
+    {
+      key: "study_reminders",
+      kicker: "Study reminder",
+      title,
+      message,
+      icon: "book-open-page-variant-outline",
+      accent: category.blue,
+      href: "/study",
+      actionLabel: "Open Study",
+    },
+  );
 }

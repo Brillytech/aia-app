@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../lib/supabase";
 import { localDayKey, localWeekDays, startOfLocalWeek } from "./days";
-import { showPopup } from "./notify";
+import { notifyAndPopup } from "./notify";
 import { sessionUser } from "./session";
 import { category } from "./theme";
 
@@ -338,14 +338,30 @@ export async function maybeOfferWeeklyReport(): Promise<boolean> {
 
   if ((data?.length ?? 0) === 0) return false;
 
-  return showPopup({
-    key: "weekly_report",
-    kicker: "Weekly report",
-    title: "Your week in review",
-    message: "Last week is ready — time studied, questions answered and where it went.",
-    icon: "chart-timeline-variant",
-    accent: category.purple,
-    href: "/weekly-report?week=last",
-    actionLabel: "View report",
-  });
+  const title = "Your week in review";
+  const message = "Last week is ready — time studied, questions answered and where it went.";
+
+  // 144 hours is six days: long enough that one Monday's report cannot be
+  // written twice, short enough that next Monday's is never suppressed. The
+  // AsyncStorage key above already guards this per device; the window is what
+  // guards it on the second device.
+  return notifyAndPopup(
+    {
+      type: "weekly_report",
+      title,
+      message,
+      actionUrl: "/weekly-report?week=last",
+      dedupeHours: 144,
+    },
+    {
+      key: "weekly_report",
+      kicker: "Weekly report",
+      title,
+      message,
+      icon: "chart-timeline-variant",
+      accent: category.purple,
+      href: "/weekly-report?week=last",
+      actionLabel: "View report",
+    },
+  );
 }

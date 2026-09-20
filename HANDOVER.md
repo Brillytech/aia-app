@@ -944,8 +944,13 @@ Verified present and wired end-to-end at `c51c36e`:
 
 Ordered roughly by user impact.
 
-**22.1 — A signed-in user opening the app lands on the login page.**
-[index.tsx](src/app/index.tsx) redirects to `/auth/login` unconditionally, and [login.tsx](src/app/auth/login.tsx) contains **no session check whatsoever** (verified: no `useEffect`, no `getSession`). Confirmed by reading both files.
+**22.1 — FIXED 2026-09-20.** A signed-in user opening the app used to land on the login page: [index.tsx](src/app/index.tsx) redirected unconditionally and [login.tsx](src/app/auth/login.tsx) has no session check. `index.tsx` now reads the session and routes through `routeAfterAuth`, sending `unavailable` to the dashboard rather than to login.
+
+This surfaced as a user report of "seeing my weekly report without logging in" — they were not signed out at all. They were signed in, looking at the wrong screen, with a popup that had correctly decided they had a report waiting. **See 22.1b for the other half.**
+
+**Still open, smaller:** `auth/login.tsx` itself has no session check, so navigating *directly* to `/auth/login` while signed in still shows the form. Left alone on purpose — bouncing it would make the sign-in screen unreachable on purpose.
+
+**22.1b — FIXED 2026-09-20. A popup could be drawn over an auth screen.** The guard existed and could not work: `clearPopups()` fired on a path *change*, a one-shot cleanup racing an asynchronous producer. On a cold open at `/auth/login` it cleared an empty queue, the on-open checks resolved a few hundred ms later and queued a popup, and the path never changed again. It is now a render condition (`visible={Boolean(popup) && !onAuthRoute}`), which has no such gap. It hides rather than discards: every trigger returns early without a session, so reaching that state means the student really is signed in and really does have a report waiting.
 
 **22.2 — `profiles.daily_streak` counts app opens, not study days.** §8. Live and visible to students. Existing values are already inflated.
 
@@ -993,7 +998,9 @@ Most recent first.
 
 | Commit | What it fixed |
 |---|---|
-| *(uncommitted at generation)* | **`notify_me()` migration + client writer** — in-app triggers can now write real notification rows, with dedupe and a double-fire guard. §16 |
+| `0e1b7bf` | **Stopped showing the sign-in form to someone already signed in** — the entry route now routes on the session (§22.1) |
+| `5f71be7` | **Popups can no longer be drawn over an auth screen** — the old path-change guard could not beat an async producer; now a render condition (§22.1b) |
+| `3ff67af` / `e0bca26` | **`notify_me()` migration + client writer** — in-app triggers can now write real notification rows, with dedupe and a double-fire guard. §16 |
 | `c51c36e` | Build-dirty marker now names the paths it found in the build log |
 | `d0c8fbb` | Untracked `supabase/.temp/cli-latest`, which had made `git status` permanently dirty and the build-id's `+` marker meaningless |
 | `1a0d14f` | Rebuilt the weekly report as a real analytics page (donut, chart, tiles, week toggle); Profile skeleton replaces its spinner |

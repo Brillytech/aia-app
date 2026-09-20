@@ -58,6 +58,32 @@ export default function RootLayout() {
   const pathname = usePathname();
 
   /**
+   * No popup is ever drawn over an auth screen.
+   *
+   * WHY THIS IS A RENDER GATE AND NOT ANOTHER clearPopups() CALL
+   * The `clearPopups()` below fires when the PATH CHANGES, and that is a
+   * one-shot cleanup racing an asynchronous producer it cannot win against.
+   * Open the app straight onto /auth/login and the order is:
+   *
+   *   1. path effect runs, clears an EMPTY queue -- nothing to do
+   *   2. the on-open checks start; each awaits storage, then the session,
+   *      then a query -- hundreds of milliseconds
+   *   3. one of them resolves and queues its popup
+   *   4. the path never changes again, so nothing ever clears it
+   *
+   * That is how a weekly report ended up sitting on top of the sign-in form.
+   * A condition evaluated on every render has no such gap.
+   *
+   * It HIDES rather than discards on purpose. Reaching this state means a valid
+   * session exists -- the triggers all return early without one -- so the
+   * student really is signed in and really does have a report waiting. Dropping
+   * it would cost them the thing; holding it means it appears on the first real
+   * screen they land on, which is where it belonged all along. A genuine sign-out
+   * still empties the queue through the auth listener below.
+   */
+  const onAuthRoute = Boolean(pathname?.startsWith("/auth"));
+
+  /**
    * Nothing queued survives the session that queued it.
    *
    * Two triggers, because they catch different things. The auth listener
@@ -193,7 +219,7 @@ export default function RootLayout() {
             notification's own category instead of an AlertType. */}
         <AlertModal
           theme={theme}
-          visible={Boolean(popup)}
+          visible={Boolean(popup) && !onAuthRoute}
           type="info"
           kicker={popup?.kicker}
           icon={popup?.icon}

@@ -594,6 +594,7 @@ Confirmed from migrations:
 | `20260913120000_notify_me.sql` | **Applied 2026-09-25** |
 | `20260925000000_close_open_read_policies.sql` | **Applied 2026-09-25** |
 | `20260925120000_app_reviews_lockdown.sql` | **Applied 2026-09-25** |
+| `20260925180000_close_remaining_open_policies.sql` | **Applied 2026-09-25** |
 
 **Every migration in this repository has now been applied.** Verified from outside with the anon key — see §22.6 for the before/after.
 
@@ -990,7 +991,20 @@ Anon-readable tables went from **9 to 4**, and the four that remain (`courses`, 
 
 Authenticated behaviour confirmed by hand after the change: broadcast announcements still appear in `/notifications`, and a real exam and practice submission saved and displayed correctly.
 
-**Still true and worth keeping in mind:** 0 rows is the right shape but is not proof of a correct policy — an empty table says nothing about its rule and will not stay empty. [`supabase/audits/pg_policies_audit.sql`](supabase/audits/pg_policies_audit.sql) is the authoritative check; re-run it whenever a table or policy is added.
+**A third batch, found by the audit and invisible to probing.** Re-running the audit after the above turned up the same pattern on three more tables:
+
+| Table | The leftover | Now |
+|---|---|---|
+| `admin_logs` | `"Allow admins create logs"` and `"Allow admins read logs"` — both `roles=public`, `USING/CHECK true`. Named for admins, checking nothing. | `admin_logs_select_admin` / `admin_logs_insert_admin`, both requiring `is_admin()`. No UPDATE or DELETE: an audit log the recorded parties can edit is not an audit log. |
+| `practice_answers` | `"Allow public read practice answers"` — `USING true` | dropped by name; 2 own-row policies remain |
+| `practice_attempts` | `"Allow public read practice attempts"` — `USING true` | dropped by name; 2 own-row policies remain |
+
+**Neither could have been caught by probing, in two different ways, and this is why the audit is constraint #12 in §24:**
+
+- `practice_answers` and `practice_attempts` read **0 rows to anon both before and after** the fix. An empty table hides an open policy perfectly — right up until it has rows in it. The probe's own label for them was "NOT proven safe", which was correct and actionable to nobody.
+- `admin_logs` was **never tested by anything**. The probe builds its table list by harvesting `from("...")` out of `src/`, and no client code references that table.
+
+**Still true and worth keeping in mind:** 0 rows is the right shape but is not proof of a correct policy. [`supabase/audits/pg_policies_audit.sql`](supabase/audits/pg_policies_audit.sql) is the authoritative check; re-run it whenever a table or policy is added. The leftover-permissive-policy pattern has now appeared in **three separate batches** — it is a property of how the project was first set up, so assume more exists until an audit says otherwise.
 
 **Two smaller things the audit surfaced and closed:** nothing in the database required an inserted `app_reviews` row to be `pending`, so a user could self-approve past moderation; and `notifications` UPDATE is now own-rows only, so no one can mark a shared announcement read for the whole school.
 

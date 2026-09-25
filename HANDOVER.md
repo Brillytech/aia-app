@@ -588,9 +588,14 @@ Confirmed from migrations:
 | `20260911155128_leaderboard_ranking.sql` | **Applied** |
 | `20260911160200_username_available.sql` | **Applied** |
 | `20260911160922_leaderboard_grants_fix.sql` | **Applied** |
-| `20260911194300_default_privileges_functions.sql` | Written, **not run** — safe to run |
-| `20260911194400_profiles_write_lockdown.sql` | Written, **not run** — safe to run |
-| `20260911194500_profiles_read_lockdown.sql` | Written, **DO NOT RUN YET** |
+| `20260911194300_default_privileges_functions.sql` | **Applied** |
+| `20260911194400_profiles_write_lockdown.sql` | **Applied** |
+| `20260911194500_profiles_read_lockdown.sql` | **Applied 2026-09-25** |
+| `20260913120000_notify_me.sql` | **Applied 2026-09-25** |
+| `20260925000000_close_open_read_policies.sql` | **Applied 2026-09-25** |
+| `20260925120000_app_reviews_lockdown.sql` | **Applied 2026-09-25** |
+
+**Every migration in this repository has now been applied.** Verified from outside with the anon key — see §22.6 for the before/after.
 
 **Why the read lockdown is blocked:** it restricts `profiles` SELECT to own-row + admin. Two client paths read other users' rows today — `isUsernameTaken()` in [username.ts](src/username.ts), and the client-side leaderboard in [leaderboard.tsx](src/app/leaderboard.tsx). Running it before those switch to `username_available()` and `leaderboard()` will break both.
 
@@ -965,11 +970,31 @@ This surfaced as a user report of "seeing my weekly report without logging in" �
 
 It is internally consistent, so grouping by `week_start` still works. But it disagrees with `days.ts` by one day, and `leaderboard()` filters on `week_start >= p_since`. Any comparison against a locally-computed Monday will be wrong. The same UTC pattern is duplicated in `getWeekStartIso()`/`getWeekStartDateKey()` inside dashboard, practice and exam.
 
-**22.5 — Nothing calls the leaderboard RPCs.** `leaderboard()`, `my_leaderboard_rank()` and `username_available()` are applied and correctly permissioned; the client still aggregates `xp_events` in the browser. This will not scale to thousands of students and it blocks the profiles read lockdown.
+**22.5 — FIXED 2026-09-25.** The client now calls `leaderboard()`, `my_leaderboard_rank()` and `username_available()` (`f45e281`). The board previously pulled up to 5000 `xp_events` rows plus a profile for every user in them and sorted in the browser; that work is server-side now, so the cost no longer grows with student count and your rank is measured against everyone rather than against the page.
 
-**22.6 — RLS posture is unknown for most tables.** §13. The `pg_policies` audit has never been run. Four tables have already been found exposed to `anon` one at a time.
+**22.6 — LARGELY RESOLVED 2026-09-25.** The anon exposure that ran through this whole project is closed.
 
-**22.7 — Two safe migrations are unapplied.** `20260911194300` and `20260911194400`.
+The pattern, once the `pg_policies` audit finally ran, was identical on every affected table: a correct "own rows only" policy sitting beside a leftover from early setup that restricted nothing. **Permissive policies are OR-ed**, so the loose one decided every request and the careful one never got a say.
+
+Measured with the anon key from the public bundle, before and after:
+
+| Table | Before | After |
+|---|---|---|
+| `profiles` | 18 rows — incl. every student email | **0** |
+| `exam_answers` | 645 rows | **0** |
+| `exam_attempts` | 14 rows | **0** |
+| `notifications` | 2 rows | **0** |
+| `app_reviews` | 2 rows | **0** |
+
+Anon-readable tables went from **9 to 4**, and the four that remain (`courses`, `materials`, `questions`, `topics`) are reference data with no personal columns, which the app needs.
+
+Authenticated behaviour confirmed by hand after the change: broadcast announcements still appear in `/notifications`, and a real exam and practice submission saved and displayed correctly.
+
+**Still true and worth keeping in mind:** 0 rows is the right shape but is not proof of a correct policy — an empty table says nothing about its rule and will not stay empty. [`supabase/audits/pg_policies_audit.sql`](supabase/audits/pg_policies_audit.sql) is the authoritative check; re-run it whenever a table or policy is added.
+
+**Two smaller things the audit surfaced and closed:** nothing in the database required an inserted `app_reviews` row to be `pending`, so a user could self-approve past moderation; and `notifications` UPDATE is now own-rows only, so no one can mark a shared announcement read for the whole school.
+
+**22.7 — RESOLVED 2026-09-25.** All migrations applied; see the table in §13.
 
 **22.8 — Page-level spinners remain** on dashboard, exam, practice, edit-profile and complete-profile, against the standing skeleton rule. *(Explicitly deferred by the project owner as its own pass — not urgent, but on the list.)*
 
@@ -977,7 +1002,7 @@ It is internally consistent, so grouping by `week_start` still works. But it dis
 
 **22.10 — No push notifications.** §16. In-app only; nothing can reach a student who does not open the app. Deliberately not started rather than half-shipped.
 
-**22.10b — `notify_me()` is written but NOT YET RUN.** [20260913120000_notify_me.sql](supabase/migrations/20260913120000_notify_me.sql) must be executed in the Supabase SQL editor. Until it is, `notifyMe()` returns `unavailable` and the triggers stay popup-only — which is exactly the previous behaviour, so nothing is broken by the delay. **This is the first task (§29).**
+**22.10b — RESOLVED 2026-09-25.** `notify_me()` is applied and correctly revoked from `anon`, so the study reminder and weekly report now write real rows to the notifications list rather than only flashing a popup.
 
 **22.11 — `semester` is fetched everywhere and never used.** §15.
 
@@ -1033,7 +1058,7 @@ These are **standing project constraints**, stated repeatedly by the project own
 7. **Never reintroduce `supabase.auth.getUser()`** in a render or redirect path. §6.
 8. **Never let a popup carrying personal data sit over an auth screen.** Both `clearPopups()` triggers in `_layout.tsx` exist because a weekly report offer was once left over the login form.
 9. **A failed query is not an empty result.** Do not let an error path silently mean "nothing to show".
-10. **Do not run `20260911194500_profiles_read_lockdown.sql`** until the client stops reading other users' profile rows. §13.
+10. **Never reintroduce a cross-user read of `profiles`.** The read lockdown is applied, so `.in("id", …)`, `.ilike("username", …)` or an unfiltered select will now return nothing rather than fail loudly. Use `username_available()` and `leaderboard()`; the only permitted direct read is your own row by your own id.
 11. **React Compiler rules are enforced.** No synchronous `setState` as the first act of an effect; prefer `useSyncExternalStore` for external stores.
 12. **Line endings are mixed within single files** (`_layout.tsx` has LF in JSX and CRLF in styles). Match the surrounding lines; do not normalise a whole file.
 
@@ -1117,11 +1142,9 @@ Sequenced so that each step unblocks the next and nothing lands on an unverified
 
 **Phase 1 — Close the security loop (highest value, lowest risk)**
 
-1. Run the `pg_policies` audit across every table and collect the output. Nothing else in this phase is trustworthy without it.
-2. Apply `20260911194300_default_privileges_functions.sql` and `20260911194400_profiles_write_lockdown.sql` (both safe today).
-3. Switch `isUsernameTaken()` → `username_available()` RPC.
-4. Switch the leaderboard → `leaderboard()` / `my_leaderboard_rank()` RPCs. *(Also fixes §22.5 scaling.)*
-5. Only then apply `20260911194500_profiles_read_lockdown.sql`.
+**✅ COMPLETE as of 2026-09-25.** The audit ran, every migration is applied, the client calls the RPCs, and anon-readable tables carrying personal data went from five to zero (§22.6).
+
+The one habit to carry forward: re-run [`pg_policies_audit.sql`](supabase/audits/pg_policies_audit.sql) whenever a table or policy is added. The leftover-permissive-policy pattern it caught came from early setup and would recur the same way.
 
 **Phase 2 — Correctness bugs users can see**
 
@@ -1153,19 +1176,24 @@ Sequenced so that each step unblocks the next and nothing lands on an unverified
 
 **Current stopping point**
 
-`master` is at `c51c36e` on the remote. **The working tree carries uncommitted notification work** — the `notify_me()` migration, its client writer, and the two triggers rewired to use it (§16) — plus this document. `tsc` shows exactly 1 error (the known `study.tsx:3290` baseline) and `expo lint` shows 56 problems (19 errors, 37 warnings) — both are the reference baselines, not new breakage. One commit is deliberately held on branch `streak-hold` pending a two-day real-usage test.
+The security work is finished and verified. Every migration in this repository is applied, the client no longer reads any other student's data, and the anon exposure that ran through this whole project is closed — five tables carrying personal data went to zero rows, confirmed from outside with the public key (§22.6). Broadcast notifications and a real exam submission were both confirmed working by hand afterwards. `tsc` shows exactly 1 error (the known `study.tsx:3290` baseline) and `expo lint` shows 56 problems (19 errors, 37 warnings) — both are the reference baselines, not new breakage. One commit is deliberately held on branch `streak-hold` pending a two-day real-usage test.
 
-No code is half-finished: `tsc`, `expo lint` and `npm run build:web` were all run against these changes and all sit at baseline. What is outstanding is the **SQL, which has not been executed** — so the new code is live-safe but inert until it is.
+No code is half-finished and nothing is waiting on a database change. `tsc` sits at its 1 baseline error, `expo lint` at 56 problems (19 errors, 37 warnings), `npm run build:web` succeeds, and the working tree is clean.
 
 **First task to continue from**
 
-> **1. Run [`20260913120000_notify_me.sql`](supabase/migrations/20260913120000_notify_me.sql) in the Supabase SQL editor.**
+> **Land `streak-hold` (`a4bf540`), then pick from the list below.**
 >
-> Paste the whole file and run it. It is additive — one function, one index, no table or policy is altered. Until it runs, the three in-app triggers stay popup-only (their previous behaviour), so nothing is broken by waiting, but nothing new is gained either.
+> The streak commit has been held longest and is the only branch not on `master`. It needs two edits before it lands: its `celebrateStreak()` still uses the old `getUser()` pattern and must move to `sessionUser()`, and `src/practiceStreak.ts` carries its own copy of `localDayKey` that should fold into [days.ts](src/days.ts). It should also be rewired to `notifyAndPopup()` now that `notify_me()` exists, so a streak reaches the notifications list like the other two triggers.
 >
-> Then verify it end to end: open the app during a study-reminder window (09:00–12:00 or 16:00–21:00) on a day with no activity, and confirm the nudge appears **both** as a popup **and** as a row in `/notifications` — and that reopening the app does **not** show the same popup twice.
+> After that there is no single forced next step. In rough order of user impact:
 >
-> **2. Run the `pg_policies` audit across every table in the Supabase project and report the output.**
+> - **`profiles.daily_streak` counts app opens** (§22.2) — live, visible, and wrong
+> - **`week_start` is written a day early** (§22.4) — measured, affects `leaderboard()`
+> - **Signup does not detect an existing account** (§22.3)
+> - **The period-gated course query is duplicated four times** (§15) — the highest-value refactor available
+> - **Page-level skeletons** on dashboard, exam, practice, edit-profile (§22.8)
+> - **Push notifications** (§16) — four parts, only one of them client code
 
 This is first because it is genuinely blocking and because four tables have already been found exposed to the `anon` role one at a time. Until the full policy list is known, any other database change is being made on an unverified foundation.
 

@@ -96,6 +96,17 @@ function getInitials(name: string) {
 /** Rows mounted per page. */
 const PAGE_SIZE = 25;
 
+/**
+ * How many ranked rows the board asks the database for.
+ *
+ * Was `ranked.slice(0, 50)` applied in the browser AFTER pulling every
+ * xp_events row and every matching profile down the wire. The 50 is unchanged;
+ * what changed is that the cut now happens server-side, so the cost stops
+ * growing with the number of students. `leaderboard()` clamps anything above
+ * 100 of its own accord.
+ */
+const BOARD_LIMIT = 50;
+
 /** Thousands separators, because #1247 is unreadable at a glance. */
 function formatRank(rank: number) {
   return `#${rank.toLocaleString()}`;
@@ -204,105 +215,101 @@ export default function LeaderboardPage() {
 
       const rangeStart = getRangeStart();
 
-      let query = supabase.from("xp_events").select("user_id, xp, created_at, week_start");
+      // Two functions instead of two table reads. See the note above the
+      // component for why this is not just a tidy-up.
+      //
+      // In parallel because they answer independent questions and neither
+      // needs the other's result: one is the visible page of the board, the
+      // other is where you personally sit in the WHOLE thing.
+      const [board, mine] = await Promise.all([
+        supabase.rpc("leaderboard", {
+          p_range: range,
+          p_since: rangeStart,
+          p_limit: BOARD_LIMIT,
+          p_offset: 0,
+        }),
+        supabase.rpc("my_leaderboard_rank", {
+          p_range: range,
+          p_since: rangeStart,
+        }),
+      ]);
 
-      if (rangeStart) {
-        if (range === "weekly") {
-          query = query.gte("week_start", rangeStart);
-        } else {
-          query = query.gte("created_at", rangeStart);
-        }
-      }
-
-      const { data: xpRows, error: xpError } = await query.limit(5000);
-
-      if (xpError) {
-        console.log("LEADERBOARD XP ERROR:", xpError.message);
+      // Fatal, not a note in the console. A board that cannot name anyone
+      // looks like working software, which is exactly how every row reading
+      // "LASU Scholar" survived as long as it did.
+      if (board.error) {
+        console.log("LEADERBOARD ERROR:", board.error.message);
         setLeaders([]);
         setMyRank(null);
         showAlert("error", "Leaderboard Error", "Could not load leaderboard right now.");
         return;
       }
 
-      const xpByUser = new Map<string, number>();
+      const ranked: LeaderboardUser[] = (board.data || []).map((row: any) => ({
+        user_id: String(row.user_id),
+        xp: Number(row.xp) || 0,
+        rank: Number(row.rank) || 0,
+        // Already resolved server-side, with the same precedence the client
+        // used to apply — minus the email fallback, which is deliberate: a
+        // board is the last place another student's address should surface.
+        displayName: row.display_name,
+        department: row.department ?? null,
+        level: row.level ?? null,
+        avatar_url: row.avatar_url ?? null,
+        isMe: String(row.user_id) === user.id,
+      }));
 
-      (xpRows || []).forEach((row: any) => {
-        const userId = row.user_id;
-        const nextXp = Number(row.xp || 0);
+      setLeaders(ranked);
 
-        if (!userId) return;
+      // Your own row, when the page above already contains it. No second
+      // lookup, and it keeps the avatar and department the board just fetched.
+      const onBoard = ranked.find((item) => item.isMe);
 
-        xpByUser.set(userId, (xpByUser.get(userId) || 0) + nextXp);
-      });
+      if (onBoard) {
+        setMyRank(onBoard);
+        return;
+      }
 
-      const userIds = Array.from(xpByUser.keys());
-
-      if (userIds.length === 0) {
-        setLeaders([]);
+      // Outside the top of the board. `my_leaderboard_rank` ranks against
+      // every user rather than the page, which the old client-side version
+      // could only do by pulling the whole xp_events table into the browser.
+      //
+      // Not fatal: the board is still correct without it, the "You" row simply
+      // does not appear.
+      if (mine.error) {
+        console.log("LEADERBOARD MY RANK ERROR:", mine.error.message);
         setMyRank(null);
         return;
       }
 
-      const { data: profilesData, error: profilesError } = await supabase
+      const row = (mine.data || [])[0];
+
+      if (!row) {
+        setMyRank(null);
+        return;
+      }
+
+      // Your OWN profile — one row, keyed on your own id. This is the read the
+      // lockdown still permits, and the only profile read left on this screen.
+      const { data: me } = await supabase
         .from("profiles")
-        // `photo_url` and `image_url` used to be in this list. Neither column
-        // exists on `profiles`, and PostgREST rejects the WHOLE select when one
-        // name is unknown (42703) — so this query returned nothing at all, the
-        // profile map came back empty, and every single row on the board fell
-        // through to the last fallback and read "LASU Scholar". The data was
-        // always fine: 15 of 17 profiles have a real username.
-        .select("id, username, full_name, email, department, level, avatar_url")
-        .in("id", userIds);
+        .select("username, full_name, department, level, avatar_url")
+        .eq("id", user.id)
+        .maybeSingle();
 
-      // Fatal, not a note in the console. Without profiles the board cannot
-      // name anyone, and a page of identical placeholder names looks like
-      // working software — which is exactly why the bug above survived. The
-      // XP failure beside this one has always been treated this way.
-      if (profilesError) {
-        console.log("LEADERBOARD PROFILE ERROR:", profilesError.message);
-        setLeaders([]);
-        setMyRank(null);
-        showAlert("error", "Leaderboard Error", "Could not load student names right now.");
-        return;
-      }
-
-      const profileMap = new Map<string, any>();
-
-      (profilesData || []).forEach((profile: any) => {
-        profileMap.set(profile.id, profile);
+      setMyRank({
+        user_id: user.id,
+        rank: Number(row.rank) || 0,
+        xp: Number(row.xp) || 0,
+        displayName:
+          (me as any)?.username ||
+          (me as any)?.full_name ||
+          `Student ${user.id.slice(0, 4)}`,
+        department: (me as any)?.department ?? null,
+        level: (me as any)?.level ?? null,
+        avatar_url: (me as any)?.avatar_url ?? null,
+        isMe: true,
       });
-
-      const ranked = userIds
-        .map((userId) => {
-          const profile = profileMap.get(userId);
-          // The last resort is deliberately not the app's own name. Every row
-          // reading "LASU Scholar" looked like a board full of students who had
-          // all chosen the same handle, rather than like missing data.
-          const displayName =
-            profile?.username ||
-            profile?.full_name ||
-            profile?.email?.split("@")[0] ||
-            `Student ${String(userId).slice(0, 4)}`;
-
-          return {
-            user_id: userId,
-            xp: xpByUser.get(userId) || 0,
-            rank: 0,
-            displayName,
-            department: profile?.department || null,
-            level: profile?.level || null,
-            avatar_url: profile?.avatar_url || null,
-            isMe: userId === user.id,
-          };
-        })
-        .sort((a, b) => b.xp - a.xp)
-        .map((item, index) => ({
-          ...item,
-          rank: index + 1,
-        }));
-
-      setLeaders(ranked.slice(0, 50));
-      setMyRank(ranked.find((item) => item.user_id === user.id) || null);
     } finally {
       setLoading(false);
       setMyRankLoading(false);

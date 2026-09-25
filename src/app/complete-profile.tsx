@@ -284,7 +284,7 @@ export default function CompleteProfile() {
 
     // Re-checked at save time, not just as you type. The debounced lookup can
     // be several seconds stale by the time someone finishes the last step.
-    if (await isUsernameTaken(cleanUsername, user.id)) {
+    if (await isUsernameTaken(cleanUsername)) {
       setLoading(false);
       setStep(0);
       showAlert(

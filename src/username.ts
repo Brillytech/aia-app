@@ -58,37 +58,47 @@ export function usernameFormatError(raw: string): string | null {
 }
 
 /**
- * True when someone else already holds this handle, case-insensitively.
+ * Is this username already somebody else's?
  *
- * `ilike` is a LIKE match, so `_` and `%` in the needle would act as
- * wildcards — "ade_1" would match a stored "adeX1" and wrongly report the
- * name as taken. They are escaped here, and the rows that come back are
- * compared exactly in JS as a second guard.
+ * WHY THIS IS AN RPC AND NOT A QUERY
+ * It used to `select("id, username").ilike(...)` straight off `profiles` —
+ * reading OTHER PEOPLE'S ROWS to answer a question about one string. That is
+ * the single reason `profiles` still has to be readable by any signed-in user,
+ * and it is what kept the read lockdown from being applied while every student
+ * name, email and role sat open to anyone holding the bundled anon key.
+ *
+ * `username_available()` is SECURITY DEFINER, so it can look across the table
+ * from inside the database and hand back one boolean. The caller learns whether
+ * the name is free and nothing else — not who has it, not how many rows matched.
+ *
+ * THE CALLER NO LONGER PASSES AN ID
+ * The old signature took the current user's id so the check would not trip over
+ * their own existing username. The function does that itself with
+ * `p.id is distinct from auth.uid()`, which is strictly better: it cannot be
+ * passed the wrong id, and it cannot be omitted by a caller that forgets. Both
+ * call sites passed their own id, so nothing changes in behaviour — except on
+ * the complete-profile screen, which never passed it and therefore used to
+ * report your own name back to you as taken.
  */
-export async function isUsernameTaken(raw: string, excludeUserId?: string | null) {
+export async function isUsernameTaken(raw: string) {
   const value = normalizeUsername(raw);
   if (!value) return false;
 
-  const escaped = value.replace(/([\\%_])/g, "\\$1");
-
-  let query = supabase.from("profiles").select("id, username").ilike("username", escaped).limit(5);
-
-  if (excludeUserId) query = query.neq("id", excludeUserId);
-
-  const { data, error } = await query;
+  const { data, error } = await supabase.rpc("username_available", {
+    p_username: value,
+  });
 
   // Fail open. A network blip should not block someone finishing signup, and
-  // the unique index is the thing that actually enforces this.
+  // the unique index on lower(username) is what actually enforces this.
   if (error) {
     console.log("USERNAME CHECK ERROR:", error.message);
     return false;
   }
 
-  const target = value.toLowerCase();
-
-  return (data || []).some(
-    (row: any) => normalizeUsername(String(row.username || "")).toLowerCase() === target,
-  );
+  // The function answers the opposite question, so only an explicit `false`
+  // means taken. Anything unexpected — null, undefined — falls through to the
+  // same fail-open rule as an error.
+  return data === false;
 }
 
 /**
@@ -114,10 +124,11 @@ export type UsernameStatus =
 /**
  * Debounced live availability for a username field.
  *
- * `excludeUserId` is the current user on the edit screen, so keeping your own
- * existing handle never reports as taken.
+ * The current user is excluded by `username_available()` itself, through
+ * `auth.uid()`, so keeping your own existing handle never reports as taken and
+ * no caller has to remember to say so.
  */
-export function useUsernameAvailability(raw: string, excludeUserId?: string | null) {
+export function useUsernameAvailability(raw: string) {
   const value = normalizeUsername(raw);
   const formatError = value ? usernameFormatError(value) : null;
   const shouldCheck = Boolean(value) && !formatError;
@@ -139,7 +150,7 @@ export function useUsernameAvailability(raw: string, excludeUserId?: string | nu
 
     // Waits for a pause in typing rather than querying per keystroke.
     const timer = setTimeout(async () => {
-      const taken = await isUsernameTaken(value, excludeUserId);
+      const taken = await isUsernameTaken(value);
 
       if (ticket !== requestRef.current) return;
 
@@ -147,7 +158,7 @@ export function useUsernameAvailability(raw: string, excludeUserId?: string | nu
     }, 450);
 
     return () => clearTimeout(timer);
-  }, [value, excludeUserId, shouldCheck]);
+  }, [value, shouldCheck]);
 
   // A result for a *different* value means the field has moved on since the
   // last answer, which reads as "checking" — so a stale "available" can never

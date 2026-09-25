@@ -72,7 +72,7 @@ export default function EditProfilePage() {
   // Excludes your own row, so keeping the handle you already have never
   // reports as taken.
   const { status: usernameStatus, message: usernameMessage } =
-    useUsernameAvailability(username, profile?.id);
+    useUsernameAvailability(username);
 
   // This section is a plain list, not an AuthField, so there is no per-field
   // error slot — the footer carries the read-out instead.
@@ -229,7 +229,7 @@ export default function EditProfilePage() {
 
       // Re-checked at save time — the debounced lookup can be stale by the
       // time someone actually taps Save.
-      if (await isUsernameTaken(nextUsername, profile.id)) {
+      if (await isUsernameTaken(nextUsername)) {
         showAlert({
           type: "warning",
           title: "Username Taken",

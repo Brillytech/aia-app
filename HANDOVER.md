@@ -1060,7 +1060,14 @@ These are **standing project constraints**, stated repeatedly by the project own
 9. **A failed query is not an empty result.** Do not let an error path silently mean "nothing to show".
 10. **Never reintroduce a cross-user read of `profiles`.** The read lockdown is applied, so `.in("id", …)`, `.ilike("username", …)` or an unfiltered select will now return nothing rather than fail loudly. Use `username_available()` and `leaderboard()`; the only permitted direct read is your own row by your own id.
 11. **React Compiler rules are enforced.** No synchronous `setState` as the first act of an effect; prefer `useSyncExternalStore` for external stores.
-12. **Line endings are mixed within single files** (`_layout.tsx` has LF in JSX and CRLF in styles). Match the surrounding lines; do not normalise a whole file.
+12. **Run [`pg_policies_audit.sql`](supabase/audits/pg_policies_audit.sql) after ANY RLS-related change, and treat its output as the result.** This is a standing rule, not a suggestion. Behavioural probing with the anon key is necessary but not sufficient, and has now missed two whole classes of problem:
+
+    - **An empty table hides an open policy perfectly.** `practice_answers` and `practice_attempts` both read 0 rows to anon while carrying a `USING true` policy. The probe reported them as "0 rows to anon — NOT proven safe", which was the correct answer and still told nobody anything actionable.
+    - **A probe that harvests table names from `src/` cannot see a table the client never references.** `admin_logs` was never tested at any point, by anything, until the audit ran.
+
+    The leftover-permissive-policy pattern has now been found in three separate batches. It is a property of how the project was first set up, so assume more of it exists until an audit says otherwise.
+
+13. **Line endings are mixed within single files** (`_layout.tsx` has LF in JSX and CRLF in styles). Match the surrounding lines; do not normalise a whole file.
 
 ---
 

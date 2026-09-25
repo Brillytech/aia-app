@@ -4,6 +4,19 @@
 -- Paste the whole file into the Supabase SQL editor and run it. READ ONLY:
 -- it selects from catalogs and writes nothing.
 --
+-- THIS IS THE STANDING FINAL CHECK. Run it after ANY change to a policy, a
+-- grant, RLS, or a new table -- and read its output as the result, rather than
+-- inferring safety from how the app behaves.
+--
+-- Probing from outside with the anon key is necessary and not sufficient. It
+-- has missed two whole classes of problem here:
+--
+--   An empty table hides an open policy perfectly. practice_answers and
+--   practice_attempts each read 0 rows to anon while carrying USING true.
+--
+--   A probe that harvests table names from src/ cannot see a table the client
+--   never references. admin_logs was never tested by anything until this ran.
+--
 -- It returns ONE result set on purpose. The SQL editor shows only the last
 -- statement's output, so four separate queries would mean four round trips.
 --

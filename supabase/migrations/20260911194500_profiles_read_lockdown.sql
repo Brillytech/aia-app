@@ -1,22 +1,20 @@
 -- profiles: own row only, plus admins.
 --
 -- ########################################################################
--- ##  DO NOT RUN YET.                                                   ##
--- ##                                                                    ##
--- ##  Two places in the app still read other students' profile rows      ##
--- ##  directly, and this breaks both the moment it runs:                 ##
--- ##                                                                    ##
--- ##    src/app/leaderboard.tsx  .in("id", userIds)  -> the board shows  ##
--- ##        "Student ####" for everyone, the bug just fixed, again       ##
--- ##    src/username.ts         .ilike("username")   -> every handle     ##
--- ##        reads as available, and signup collides on the unique index  ##
--- ##                                                                    ##
--- ##  Both have replacements already applied to this database —          ##
--- ##  leaderboard() and username_available() — but the client does not   ##
--- ##  call them yet. Run this only after that client change ships.       ##
--- ##                                                                    ##
--- ##  Requires 20260911194400 first: the admin policy below uses         ##
--- ##  is_admin(), which that file creates.                               ##
+-- ##  APPLIED 2026-09-25. This file has already run successfully.      ##
+-- ##                                                                   ##
+-- ##  The DO NOT RUN YET warning that stood here is obsolete. It said  ##
+-- ##  leaderboard.tsx and username.ts still read other students' rows  ##
+-- ##  directly; both were switched to leaderboard() and                ##
+-- ##  username_available() in f45e281, and an audit of every           ##
+-- ##  from("profiles") chain in the client now reports 0 cross-user    ##
+-- ##  reads and 13 own-row reads.                                      ##
+-- ##                                                                   ##
+-- ##  Confirmed from outside with the anon key: profiles returned 18   ##
+-- ##  rows before and returns 0 after.                                 ##
+-- ##                                                                   ##
+-- ##  Requires 20260911194400 first: the admin policy below uses       ##
+-- ##  is_admin(), which that file creates.                             ##
 -- ########################################################################
 --
 -- WHAT THE POLICIES SAY TODAY
@@ -54,6 +52,7 @@ create policy "Users can view own profile"
   using (auth.uid() = id);
 
 -- What the first dropped policy was named for.
+drop policy if exists "Admins can read all profiles" on public.profiles;
 create policy "Admins can read all profiles"
   on public.profiles for select
   to authenticated

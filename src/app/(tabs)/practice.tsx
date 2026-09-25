@@ -25,9 +25,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
 import { sessionUser } from "../../session";
-import { sortCoursesAlphabetically } from "../../courses";
+import { courseCode, sortCoursesAlphabetically } from "../../courses";
 import { notifyAndPopup } from "../../notify";
 import { practiceStreak } from "../../practiceStreak";
+import { loadPracticeHistory, type PracticeHistory } from "../../practiceHistory";
+import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
 import { useContentInset } from "../../ui/layout/breakpoints";
@@ -308,6 +310,8 @@ export default function Practice() {
   const [secondsLeft, setSecondsLeft] = useState(30 * 60);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [savedSession, setSavedSession] = useState<any>(null);
+  /** Per-course practice history. Null until the query lands. */
+  const [practiceHistory, setPracticeHistory] = useState<PracticeHistory | null>(null);
   const [practiceAlert, setPracticeAlert] = useState<PracticeAlertState>({
     visible: false,
     type: "info",
@@ -622,6 +626,20 @@ export default function Practice() {
 
     setCourses(uniqueCourses);
     setLoading(false);
+
+    // After the courses are on screen, never blocking them. The tiles render
+    // immediately with `progress: null` and gain their arc when this lands —
+    // history is a decoration on a list that is already useful without it.
+    loadPracticeHistory(
+      user.id,
+      uniqueCourses.map((course) => course.id),
+    )
+      .then((history) => {
+        if (history) setPracticeHistory(history);
+      })
+      .catch(() => {
+        // Nothing to surface. The tiles simply stay in their pre-history state.
+      });
   }
 
   async function openCourse(course: Course) {
@@ -1179,6 +1197,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
     return (
       <CoursesScreen
         theme={theme}
+        practiceHistory={practiceHistory}
         isDark={isDark}
         insets={insets}
         courses={courses}
@@ -1846,6 +1865,7 @@ function CoursesScreen({
   isDark,
   insets,
   courses,
+  practiceHistory,
   savedSession,
   onResume,
   onDiscard,
@@ -1855,6 +1875,8 @@ function CoursesScreen({
   isDark: boolean;
   insets: { top: number };
   courses: Course[];
+  /** Null until the history query lands. */
+  practiceHistory: PracticeHistory | null;
   savedSession: any;
   onResume: () => void;
   onDiscard: () => void;
@@ -1971,57 +1993,31 @@ function CoursesScreen({
               text="No course matches your profile yet. Please check your department and level, then try again."
             />
           ) : (
-            // A 2-up tile grid, deliberately NOT study's folder rows. Study
-            // courses are containers you open; practice courses are targets
-            // you start — so they get their own shape.
-            <View style={styles.grid}>
+            // Full-width rows on Study's tile base, not the old 2-up cards.
+            // Practice needs room for history — coverage, accuracy, a session
+            // count — and a 48%-wide card had nowhere to put it. Same folder,
+            // same hinge, different face: see ui/PracticeTile.
+            <View style={practiceTileLayout.grid}>
               {courses.map((course) => {
                 const courseTheme = getCourseTheme(course);
-
+            
                 return (
-                  <Card
+                  <View
                     key={course.id}
-                    onPress={() => onOpenCourse(course)}
-                    theme={theme}
-                    tone={courseTheme.color}
-                    backgroundColor={theme.card}
-                    borderColor={theme.border}
-                    shadowColor={theme.shadow}
-                    radiusSize="xl"
-                    style={styles.courseCard}
+                    style={[practiceTileLayout.cell, practiceTileLayout.cellFull]}
                   >
-                    <View style={styles.cardTop}>
-                      <IconPlate
-                        theme={theme}
-                        icon={courseTheme.icon}
-                        color={courseTheme.color}
-                        size="md"
-                      />
-
-                      <View
-                        style={[
-                          styles.startDot,
-                          { backgroundColor: withAlpha(courseTheme.color, isDark ? 0.28 : 0.18) },
-                        ]}
-                      >
-                        <MaterialCommunityIcons
-                          name="play"
-                          size={14}
-                          color={courseTheme.color}
-                        />
-                      </View>
-                    </View>
-
-                    <Text style={[styles.courseCode, { color: courseTheme.color }]}>
-                      {course.code}
-                    </Text>
-                    <Text style={[styles.cardTitle, { color: theme.text }]}>
-                      {course.title}
-                    </Text>
-                    <Text style={[styles.cardMeta, { color: theme.muted }]}>
-                      {course.level || "Level"}
-                    </Text>
-                  </Card>
+                    <PracticeTile
+                      theme={theme}
+                      title={course.title}
+                      code={courseCode(course)}
+                      color={courseTheme.color}
+                      icon={courseTheme.icon}
+                      // Null until the history query lands, which the tile
+                      // renders as its pre-history state rather than as zero.
+                      progress={practiceHistory?.get(course.id) ?? null}
+                      onPress={() => onOpenCourse(course)}
+                    />
+                  </View>
                 );
               })}
             </View>
@@ -2113,13 +2109,6 @@ const styles = StyleSheet.create({
     height: FADE_HEIGHT,
   },
   headerFadeBand: { flex: 1 },
-  startDot: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   optionsWrap: {
     borderRadius: radius.lg,
     overflow: "hidden",
@@ -2164,7 +2153,6 @@ const styles = StyleSheet.create({
   kicker: { fontSize: 12, fontWeight: "900", letterSpacing: 1 },
   pageTitle: { ...typeScale.display },
   pageSub: { fontSize: 15, lineHeight: 22, marginTop: 8, marginBottom: 4 },
-  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 12 },
   resumePanel: { padding: spacing.lg, marginBottom: spacing.xl },
   resumeTop: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 },
   resumeTitle: { fontSize: 17, fontWeight: "900" },
@@ -2175,13 +2163,8 @@ const styles = StyleSheet.create({
   // Layout only. Card owns radius, border and elevation — leaving them here
   // meant this style overrode the toned treatment and stacked a hardcoded
   // black shadow on top of it, which is what made light mode look boxed.
-  courseCard: { width: "48%", minHeight: 176, padding: spacing.lg },
   cardGlow: { position: "absolute", width: 145, height: 145, borderRadius: 75, right: -66, top: -66, opacity: 0.72 },
-  cardTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
   iconBox: { width: 56, height: 56, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  courseCode: { fontSize: 13, fontWeight: "900" },
-  cardTitle: { ...typeScale.bodyLg, fontWeight: weight.semi, marginTop: spacing.xs },
-  cardMeta: { fontSize: 12, marginTop: 9, lineHeight: 18, fontWeight: "700" },
   list: { gap: 14 },
   topicCard: { padding: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.md },
   smallIcon: { width: 52, height: 52, borderRadius: 18, alignItems: "center", justifyContent: "center" },

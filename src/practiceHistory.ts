@@ -4,29 +4,36 @@ import type { PracticeProgress } from "./ui/PracticeTile";
 /**
  * Per-course practice history, for the course-selection tiles.
  *
- * TWO QUERIES FOR THE WHOLE GRID, NOT TWO PER COURSE
- * A student sees a handful of courses, but doing this per tile would be a
- * request each and a waterfall of them on every open. Both reads below are one
- * round trip covering every course on the screen.
+ * WHY COVERAGE COMES FROM THE ANSWERS, NOT THE ATTEMPTS
+ * The obvious source would be `practice_attempts.topic_id`. That column does
+ * not exist. The first version of this file selected it anyway, and PostgREST
+ * rejects the WHOLE select when one name is unknown (42703) — so it returned
+ * null on every call and no tile could ever have shown history. Same failure
+ * that once made every leaderboard row read "LASU Scholar".
  *
- * WHAT IT CAN AND CANNOT KNOW
- * `practice_attempts` is own-row under RLS, which is exactly right here — this
- * is the student's own history and nobody else's. `topics` is reference data
- * the app already reads elsewhere.
+ * Topic is recoverable regardless: every answer row carries `question_id`, and
+ * a question knows its topic. `practice_answers -> questions!inner(topic_id)`
+ * is the real relationship, verified against the live schema.
  *
- * There is no history at all today: `practice_attempts` is empty across the
- * whole project, so every course comes back `sessions: 0`. That is a real
- * state, not a failure, and the tile has a first-class design for it.
+ * That turns out to be the better source anyway. Coverage measured from answers
+ * is true no matter how a session was scoped, so a session spanning several
+ * topics — which nothing in the data model prevents, since the attempt row
+ * never recorded a topic — credits all of them rather than none.
+ *
+ * THREE QUERIES FOR THE WHOLE GRID, NOT THREE PER COURSE
+ * A student sees a handful of courses; doing this per tile would be a waterfall
+ * on every open. All three below cover every course on the screen at once.
  *
  * A FAILED READ IS NOT AN EMPTY HISTORY
- * An errored query returns null rather than a map of zeroes. Zeroes would tell
- * every tile to say "Start practising" to a student who has been practising for
- * weeks, which is worse than showing nothing while the data is unavailable.
+ * An errored attempts query returns null rather than a map of zeroes. Zeroes
+ * would tell a student who has practised for weeks that they had not started.
  */
 
 /** Far enough back to cover any history worth showing on a tile. */
 const WINDOW_DAYS = 365;
 const MAX_ROWS = 2000;
+/** Answers outnumber attempts by roughly the question count, so this is higher. */
+const MAX_ANSWER_ROWS = 8000;
 
 export type PracticeHistory = Map<string, PracticeProgress>;
 
@@ -39,17 +46,28 @@ export async function loadPracticeHistory(
   const since = new Date();
   since.setDate(since.getDate() - WINDOW_DAYS);
 
-  const [attempts, topics] = await Promise.all([
+  const [attempts, answered, topics] = await Promise.all([
+    // Sessions and accuracy. Note there is no topic_id here — see above.
     supabase
       .from("practice_attempts")
-      .select("course_id, topic_id, score_percent")
+      .select("course_id, score_percent")
       .eq("user_id", userId)
       .in("course_id", courseIds)
       .gte("created_at", since.toISOString())
       .limit(MAX_ROWS),
-    // Reference data, not per-user. Needed for the denominator of coverage —
-    // without it the tile falls back to a session count rather than inventing
-    // a fraction.
+
+    // Coverage. `!inner` makes the embed a join rather than a nested object,
+    // which is what lets the filter below apply to the answer rows instead of
+    // merely trimming what comes back inside each one.
+    supabase
+      .from("practice_answers")
+      .select("question_id, questions!inner(course_id, topic_id)")
+      .eq("user_id", userId)
+      .in("questions.course_id", courseIds)
+      .gte("created_at", since.toISOString())
+      .limit(MAX_ANSWER_ROWS),
+
+    // Reference data, for the denominator.
     supabase.from("topics").select("id, course_id").in("course_id", courseIds),
   ]);
 
@@ -59,8 +77,10 @@ export async function loadPracticeHistory(
     return null;
   }
 
-  // A missing topic count is survivable; a missing attempt list is not. The
-  // tile already handles `topicsTotal: 0` by showing sessions instead.
+  // These two are survivable. Without coverage the tile shows a session count;
+  // without the topic list it does the same. Neither is worth losing the
+  // accuracy figure over.
+  if (answered.error) console.log("PRACTICE HISTORY ANSWERS ERROR:", answered.error.message);
   if (topics.error) console.log("PRACTICE HISTORY TOPICS ERROR:", topics.error.message);
 
   const topicsTotal = new Map<string, number>();
@@ -73,7 +93,6 @@ export async function loadPracticeHistory(
 
   const sessions = new Map<string, number>();
   const scores = new Map<string, number[]>();
-  const attemptedTopics = new Map<string, Set<string>>();
 
   for (const row of attempts.data || []) {
     const courseId = String((row as any).course_id || "");
@@ -87,15 +106,26 @@ export async function loadPracticeHistory(
       list.push(score);
       scores.set(courseId, list);
     }
+  }
 
-    // Distinct, because practising one topic ten times is still one topic
-    // covered — counting rows here would let repetition fake breadth.
-    const topicId = (row as any).topic_id;
-    if (topicId) {
-      const set = attemptedTopics.get(courseId) || new Set<string>();
-      set.add(String(topicId));
-      attemptedTopics.set(courseId, set);
-    }
+  // Distinct, because answering one topic's questions fifty times is still one
+  // topic covered — counting rows here would let repetition fake breadth.
+  const attemptedTopics = new Map<string, Set<string>>();
+
+  for (const row of answered.data || []) {
+    // An `!inner` embed still arrives as an object (or a one-element array,
+    // depending on how the relationship is inferred), so both shapes are read.
+    const q: any = Array.isArray((row as any).questions)
+      ? (row as any).questions[0]
+      : (row as any).questions;
+
+    const courseId = String(q?.course_id || "");
+    const topicId = q?.topic_id;
+    if (!courseId || !topicId) continue;
+
+    const set = attemptedTopics.get(courseId) || new Set<string>();
+    set.add(String(topicId));
+    attemptedTopics.set(courseId, set);
   }
 
   const history: PracticeHistory = new Map();

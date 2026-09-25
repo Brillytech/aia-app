@@ -936,7 +936,16 @@ export default function Practice() {
       .insert({
         user_id: user.id,
         course_id: selectedCourse.id,
-        topic_id: selectedTopic.id,
+        // NO topic_id. The column does not exist on practice_attempts, and
+        // PostgREST rejects the whole insert when one name is unknown (42703).
+        // Every practice session since this shipped failed here and returned
+        // silently below, so no attempt row, no answer rows and no XP were ever
+        // written — exam_attempts has rows precisely because exam never sent
+        // this column.
+        //
+        // Topic is not lost: each answer row carries question_id, and a
+        // question knows its topic. See practiceHistory.ts, which derives
+        // coverage through that join instead.
         score_percent: percentage,
         correct_answers: score,
         wrong_answers: wrong,
@@ -950,7 +959,22 @@ export default function Practice() {
       .select("id")
       .single();
 
-    if (attemptError || !attempt) return;
+    // LOUD, not silent. This exact line used to be a bare `return`, which is
+    // how a broken insert went unnoticed: the result screen renders from local
+    // state, so a session that saved nothing looked identical to one that
+    // saved. A save that fails must never look like a save that worked.
+    if (attemptError || !attempt) {
+      console.log("PRACTICE SAVE ERROR:", attemptError?.message || "no row returned");
+
+      showPracticeAlert({
+        type: "error",
+        title: "Result not saved",
+        message:
+          "Your score is on screen, but it could not be saved. Your XP and history for this session are missing.",
+      });
+
+      return;
+    }
 
     const answerRows = questions.map((q) => {
       const selected = answers[q.id] || null;

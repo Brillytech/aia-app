@@ -29,6 +29,8 @@ import { courseCode, sortCoursesAlphabetically } from "../../courses";
 import { notifyAndPopup } from "../../notify";
 import { practiceStreak } from "../../practiceStreak";
 import { loadPracticeHistory, type PracticeHistory } from "../../practiceHistory";
+import { loadTopicHistory, weakTopicIds, WEAK_THRESHOLD, type TopicHistory } from "../../topicHistory";
+import { Segmented } from "../../ui/Segmented";
 import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
 import { useScreenTime } from "../../screen-time";
 import { category, Theme, useThemeMode } from "../../theme";
@@ -224,6 +226,18 @@ function assignmentMatchesProfile(assignment: any, profile: any) {
   return schoolMatch && departmentMatch && levelMatch;
 }
 
+/**
+ * Band colour for a topic's accuracy. Same thresholds as the result screen's
+ * bands and the course tile's numeral, so one score never reads as two
+ * different judgements in two places.
+ */
+function scoreBand(accuracy: number, theme: Theme) {
+  if (accuracy >= 75) return theme.success;
+  if (accuracy >= 50) return theme.warning;
+
+  return theme.error;
+}
+
 function getBand(percent: number) {
   if (percent >= 80) return { label: "Excellent", color: "#22C55E", note: "Very strong performance. Keep the streak going." };
   if (percent >= 70) return { label: "Very Good", color: "#3B82F6", note: "Good work. Review the few weak points." };
@@ -312,6 +326,14 @@ export default function Practice() {
   const [savedSession, setSavedSession] = useState<any>(null);
   /** Per-course practice history. Null until the query lands. */
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistory | null>(null);
+  /** Per-topic history for the open course. Null until it lands, or on error. */
+  const [topicHistory, setTopicHistory] = useState<TopicHistory | null>(null);
+  const [topicSort, setTopicSort] = useState<"syllabus" | "weakest">("syllabus");
+  /**
+   * Set only for a session spanning several topics, which is what the weak
+   * topics banner starts. Null means the ordinary one-topic session.
+   */
+  const [sessionTopicIds, setSessionTopicIds] = useState<string[] | null>(null);
   const [practiceAlert, setPracticeAlert] = useState<PracticeAlertState>({
     visible: false,
     type: "info",
@@ -645,6 +667,10 @@ export default function Practice() {
   async function openCourse(course: Course) {
     setSelectedCourse(course);
     setSelectedTopic(null);
+    // Belongs to the course being left, not the one being opened.
+    setTopicHistory(null);
+    setTopicSort("syllabus");
+    setSessionTopicIds(null);
     setScreen("topics");
     setLoading(true);
     setLoadingText("Loading topics...");
@@ -663,9 +689,43 @@ export default function Practice() {
 
     setTopics(error || !data ? [] : data);
     setLoading(false);
+
+    // After the topics are on screen, never blocking them.
+    const user = await sessionUser();
+    if (!user) return;
+
+    loadTopicHistory(user.id, course.id)
+      .then((history) => {
+        if (history) setTopicHistory(history);
+      })
+      .catch(() => {
+        // The list stands without it; rows simply read "Not attempted".
+      });
   }
 
-  function openTopic(topic: Topic) { setSelectedTopic(topic); setScreen("setup"); }
+  function openTopic(topic: Topic) {
+    setSessionTopicIds(null);
+    setSelectedTopic(topic);
+    setScreen("setup");
+  }
+
+  /**
+   * Start a session drawn from several topics at once.
+   *
+   * Possible because the data model never constrained a session to one topic:
+   * `practice_attempts` has no topic_id column, and coverage is derived from
+   * the answers. The one-topic scoping was a filter in startPractice, not a
+   * schema rule.
+   */
+  function openWeakTopics(ids: string[]) {
+    if (ids.length === 0) return;
+
+    setSessionTopicIds(ids);
+    // No single topic to name, and inventing one would mislabel the session
+    // everywhere it is displayed.
+    setSelectedTopic(null);
+    setScreen("setup");
+  }
 
   function resumeSavedSession() {
     if (!savedSession) return;
@@ -709,7 +769,8 @@ export default function Practice() {
   }
 
   async function startPractice() {
-    if (!selectedCourse || !selectedTopic) return;
+    // One of the two has to be set: a chosen topic, or an explicit list.
+    if (!selectedCourse || (!selectedTopic && !sessionTopicIds?.length)) return;
 
     const limit = getQuestionLimit();
     const duration = getDurationSeconds();
@@ -729,12 +790,20 @@ export default function Practice() {
     if (!isUuid(selectedCourse.id)) {
       loadedQuestions = fallbackQuestions.slice(0, limit);
     } else {
-      const { data, error } = await supabase
+      let query = supabase
         .from("questions")
         .select("id, course_id, topic_id, question, option_a, option_b, option_c, option_d, option_e, correct_answer, explanation")
-        .eq("course_id", selectedCourse.id)
-        .eq("topic_id", selectedTopic.id)
-        .limit(limit);
+        .eq("course_id", selectedCourse.id);
+
+      // A list when the weak-topics banner started this, one topic otherwise.
+      // Nothing in the data model ever required the latter — the attempt row
+      // has no topic_id at all, so the single-topic scoping was only ever this
+      // filter.
+      query = sessionTopicIds?.length
+        ? query.in("topic_id", sessionTopicIds)
+        : query.eq("topic_id", selectedTopic!.id);
+
+      const { data, error } = await query.limit(limit);
 
       if (error) {
         setLoading(false);
@@ -910,7 +979,14 @@ export default function Practice() {
 
   async function updateProgress() {
     const user = await sessionUser();
-    if (!user || !selectedCourse || !selectedTopic || !isUuid(selectedCourse.id)) return;
+    if (!user || !selectedCourse || !isUuid(selectedCourse.id)) return;
+
+    // Skipped entirely for a multi-topic session. user_progress keys a row to
+    // ONE topic and there is no honest value for several — writing null, or
+    // splitting the counts across topics, would both be inventing an
+    // attribution. practice_answers records every answer with its question, so
+    // nothing is actually lost by not writing here.
+    if (!selectedTopic) return;
     // Answered, not the session size. Recording questions.length meant
     // skipping every question still logged a full session's work, and it
     // also deflated profile accuracy (correct / picked, rather than
@@ -929,7 +1005,10 @@ export default function Practice() {
   async function savePracticeAttempt() {
     const user = await sessionUser();
 
-    if (!user || !selectedCourse || !selectedTopic || !isUuid(selectedCourse.id)) return;
+    // No selectedTopic check. It is not inserted below, and requiring it would
+    // make a multi-topic session return silently here — the exact shape of the
+    // bug that discarded every practice result before this.
+    if (!user || !selectedCourse || !isUuid(selectedCourse.id)) return;
 
     const { data: attempt, error: attemptError } = await supabase
       .from("practice_attempts")
@@ -1010,7 +1089,9 @@ export default function Practice() {
       user_id: user.id,
       mode: "practice",
       course_id: selectedCourse.id,
-      topic_id: selectedTopic.id,
+      // Null for a multi-topic session; the column is nullable and
+      // useScreenTime already writes null when there is no topic in context.
+      topic_id: selectedTopic?.id ?? null,
       // Zero, deliberately. `useScreenTime` is the single source of learning
       // time now; leaving `timeUsed` here would count the session twice.
       duration_seconds: 0,
@@ -1234,19 +1315,54 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   }
 
   if (screen === "topics") {
+    // Per-topic history, and the topics worth putting in front of the student.
+    // Never-attempted topics are deliberately NOT weak: "weak" is a judgement
+    // that needs evidence, and a topic you have not tried is not one you are
+    // bad at.
+    const weakIds = weakTopicIds(topicHistory, topics.map((t) => t.id));
+    const attemptedCount = topics.filter((t) => topicHistory?.get(t.id)).length;
+
+    // The toggle is meaningless with nothing to sort by, so it is absent
+    // rather than present-and-useless until the course has real history.
+    const canSort = attemptedCount > 0;
+
+    const ordered = canSort && topicSort === "weakest"
+      ? [...topics].sort((a, b) => {
+          const A = topicHistory?.get(a.id);
+          const B = topicHistory?.get(b.id);
+
+          // Attempted topics first, weakest of those at the top. Unattempted
+          // keep their syllabus order below, because nothing distinguishes them.
+          if (!A && !B) return 0;
+          if (!A) return 1;
+          if (!B) return -1;
+
+          return (A.accuracy ?? 100) - (B.accuracy ?? 100);
+        })
+      : topics;
+
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}>
+        <ScrollView
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}
+          showsVerticalScrollIndicator={false}
+        >
           <TouchableOpacity onPress={() => setScreen("courses")} activeOpacity={0.86} style={styles.backBtn}>
             <View style={[styles.backIconWrap, { backgroundColor: theme.card, borderColor: theme.border }]}>
               <MaterialCommunityIcons name="chevron-left" size={24} color={theme.text} />
             </View>
             <Text style={[styles.backText, { color: theme.text }]}>Back</Text>
           </TouchableOpacity>
+
           <Text style={[styles.kicker, { color: selectedTheme.color }]}>
             {selectedCourse?.code}
+            {topics.length > 0 ? ` · ${topics.length} TOPICS` : ""}
           </Text>
-          <Text style={[styles.pageTitle, { color: theme.text }]}>Select topic</Text>
+          {/* The course name, not "Select topic". The instruction was the same
+              on every course and told nobody which one they had opened. */}
+          <Text style={[styles.pageTitle, { color: theme.text }]} numberOfLines={2}>
+            {selectedCourse?.title || "Topics"}
+          </Text>
 
           {topics.length === 0 ? (
             <EmptyState
@@ -1256,45 +1372,87 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
               text="No topics have been added for this course yet."
             />
           ) : (
-            <View style={styles.list}>
-              {topics.map((topic) => (
-                <Card
-                  key={topic.id}
-                  onPress={() => openTopic(topic)}
-                  theme={theme}
-                  tone={selectedTheme.color}
-                  backgroundColor={theme.card}
-                  borderColor={theme.border}
-                  shadowColor={theme.shadow}
-                  radiusSize="lg"
-                  style={styles.topicCard}
+            <>
+              {weakIds.length > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.86}
+                  onPress={() => openWeakTopics(weakIds)}
+                  style={[styles.weakBanner, { backgroundColor: withAlpha(theme.error, 0.12) }]}
                 >
-                  <IconPlate
-                    theme={theme}
-                    icon="bullseye-arrow"
-                    color={selectedTheme.color}
-                    size="md"
-                  />
+                  <MaterialCommunityIcons name="trending-down" size={16} color={theme.error} />
+                  <Text style={[styles.weakText, { color: theme.error }]}>
+                    {weakIds.length} {weakIds.length === 1 ? "topic" : "topics"} under {WEAK_THRESHOLD}% — practise these
+                  </Text>
+                  <MaterialCommunityIcons name="chevron-right" size={16} color={theme.error} />
+                </TouchableOpacity>
+              ) : null}
 
-                  <View style={styles.flex1}>
-                    <Text style={[styles.topicTitle, { color: theme.text }]}>
-                      {topic.title}
-                    </Text>
-                    {topic.description ? (
-                      <Text style={[styles.topicDesc, { color: theme.muted }]}>
-                        {topic.description}
-                      </Text>
-                    ) : null}
-                  </View>
+              {canSort ? (
+                <Segmented
+                  theme={theme}
+                  value={topicSort}
+                  onChange={setTopicSort}
+                  stretch
+                  options={[
+                    { value: "syllabus" as const, label: "Course order" },
+                    { value: "weakest" as const, label: "Weakest first" },
+                  ]}
+                  style={styles.sortToggle}
+                />
+              ) : null}
 
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={22}
-                    color={withAlpha(selectedTheme.color, 0.75)}
-                  />
-                </Card>
-              ))}
-            </View>
+              <View style={[styles.topicList, { borderColor: theme.border }]}>
+                {ordered.map((topic) => {
+                  const h = topicHistory?.get(topic.id);
+                  const score = h?.accuracy ?? null;
+
+                  return (
+                    <TouchableOpacity
+                      key={topic.id}
+                      activeOpacity={0.86}
+                      onPress={() => openTopic(topic)}
+                      style={[styles.topicRow, { borderColor: theme.border }]}
+                    >
+                      {/* A rule in the course colour rather than a 44pt plate.
+                          Twenty-seven identical bullseye plates carried no
+                          information and were most of what made this a wall. */}
+                      <View
+                        style={[
+                          styles.topicRule,
+                          { backgroundColor: h ? selectedTheme.color : withAlpha(selectedTheme.color, 0.28) },
+                        ]}
+                      />
+
+                      <View style={styles.flex1}>
+                        <Text style={[styles.topicRowTitle, { color: theme.text }]}>
+                          {topic.title}
+                        </Text>
+                        <Text style={[styles.topicRowMeta, { color: theme.muted }]}>
+                          {h
+                            ? `${h.answered} answered`
+                            : "Not attempted"}
+                        </Text>
+                      </View>
+
+                      {score === null ? null : (
+                        <View
+                          style={[
+                            styles.topicScore,
+                            { backgroundColor: withAlpha(scoreBand(score, theme), 0.16) },
+                          ]}
+                        >
+                          <Text style={[styles.topicScoreText, { color: scoreBand(score, theme) }]}>
+                            {score}%
+                          </Text>
+                        </View>
+                      )}
+
+                      <MaterialCommunityIcons name="chevron-right" size={18} color={theme.muted} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
           )}
         </ScrollView>
       </View>
@@ -2190,10 +2348,32 @@ const styles = StyleSheet.create({
   cardGlow: { position: "absolute", width: 145, height: 145, borderRadius: 75, right: -66, top: -66, opacity: 0.72 },
   iconBox: { width: 56, height: 56, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   list: { gap: 14 },
-  topicCard: { padding: spacing.lg, flexDirection: "row", alignItems: "center", gap: spacing.md },
-  smallIcon: { width: 52, height: 52, borderRadius: 18, alignItems: "center", justifyContent: "center" },
-  topicTitle: { ...typeScale.bodyLg, fontWeight: weight.semi },
-  topicDesc: { fontSize: 13, lineHeight: 19, marginTop: 5 },
+
+  // --- topics screen ---
+  weakBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    marginBottom: spacing.md,
+  },
+  weakText: { flex: 1, ...typeScale.caption, fontWeight: weight.bold },
+  sortToggle: { marginBottom: spacing.md },
+  topicList: { borderTopWidth: StyleSheet.hairlineWidth },
+  topicRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  topicRule: { width: 3, alignSelf: "stretch", borderRadius: 2 },
+  topicRowTitle: { ...typeScale.body, fontWeight: weight.semi },
+  topicRowMeta: { ...typeScale.micro, marginTop: 2 },
+  topicScore: { paddingHorizontal: spacing.xs + 2, paddingVertical: 2, borderRadius: radius.pill },
+  topicScoreText: { ...typeScale.micro, fontWeight: weight.bold },
   setupPanel: { borderWidth: 1, borderRadius: 32, padding: 24 },
   setupTop: { flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 18 },
   setupTitle: { fontSize: 25, fontWeight: "900" },

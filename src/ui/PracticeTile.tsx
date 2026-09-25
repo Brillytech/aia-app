@@ -1,5 +1,13 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import type { Theme } from "../theme";
 import type { IconName } from "./alerts";
 import { elevation, motion, radius, spacing, type as typeScale, weight, withAlpha } from "./tokens";
@@ -11,43 +19,34 @@ import { elevation, motion, radius, spacing, type as typeScale, weight, withAlph
  * It was, briefly: the same `CourseFolder` with a progress arc added beside it.
  * That read as the same page with a decoration, which is the opposite of what
  * is wanted — a student should know which mode they are in before reading a
- * single word, and certainly without having to notice a small arc.
+ * word, and certainly without having to notice a small arc.
  *
  * A folder is a container you open to read. That is Study, exactly. Practice is
  * a thing you come back to and measure yourself against, so it gets the shape
- * of a scoreboard row instead:
- *
- *   - a colour spine down the left edge, not a folder with a tab
- *   - the course code ABOVE the title in the course colour, not a badge parked
- *     on the right — an inverted hierarchy reads as a different object even at
- *     a glance
- *   - a horizontal coverage bar, not a ring
- *   - the score as a large numeral, the one thing this mode is actually about
- *
- * No part of the silhouette matches Study's. That is the point.
+ * of a scoreboard row instead: a colour spine rather than a folder tab, the
+ * course code ABOVE the title rather than a badge parked right, a horizontal
+ * bar rather than a ring, and the score as a large numeral. No part of the
+ * silhouette matches Study's.
  *
  * WHY COLOUR IS A SPINE AND NOT THE ICON'S WHOLE IDENTITY
  * The real data settled this: 60 courses use 37 distinct icons but only SIX
  * colours, so roughly ten courses share each. Colour cannot identify a course
- * here; the glyph can. Giving colour the spine — an accent, not an identifier —
- * says the right amount.
+ * here; the glyph can. Colour accents, the glyph identifies.
  *
  * TWO METRICS, EACH LABELLED, KEPT APART
- * The bar is coverage and the numeral is accuracy. An earlier version put both
- * as bare percentages side by side, and a tile reading "13%" next to "94%" told
- * nobody anything. They are separated here by form as well as position — a bar
- * with its own fraction beneath, and a numeral under the words "AVG %" — so
- * neither can be mistaken for the other.
+ * The bar is coverage, the numeral is accuracy. An earlier version put both as
+ * bare percentages side by side and a tile read "13%" next to "94%" with
+ * nothing saying which was which. They are separated by form as well as
+ * position now.
  *
  * NOT STARTED SHOWS NO BAR AND NO NUMBER
- * `practice_attempts` is empty across the whole project, so this is every tile
- * on first use, not an edge case. An empty bar and a 0 would read as failure on
- * a course nobody has touched. The row offers the action instead, and gains its
- * numbers once they are true.
+ * `practice_attempts` took no rows at all until the save bug was fixed, so this
+ * is still every tile for most students. An empty bar and a 0 would read as
+ * failure on a course nobody has touched.
  */
 
 export type PracticeProgress = {
-  /** Distinct topics with at least one recorded attempt. */
+  /** Distinct topics with at least one recorded answer. */
   topicsAttempted: number;
   /** Topics the course has. Zero means the count is not known yet. */
   topicsTotal: number;
@@ -57,7 +56,6 @@ export type PracticeProgress = {
   sessions: number;
 };
 
-/** Accuracy band. Matches the result screen's thresholds rather than inventing new ones. */
 function bandColor(accuracy: number, theme: Theme) {
   if (accuracy >= 75) return theme.success;
   if (accuracy >= 50) return theme.warning;
@@ -68,14 +66,41 @@ function bandColor(accuracy: number, theme: Theme) {
 /**
  * Smallest visible fill, in points.
  *
- * One topic of twenty-seven is 3.7%, which across a ~180pt bar is under four
- * points — a mark you would read as a rendering artefact rather than as
- * progress. Below this width the bar stops being proportional and simply says
- * "started", which is the honest reading of a single topic anyway.
- *
- * It is a floor, not a fudge: zero coverage still draws nothing at all.
+ * One topic of twenty-seven is 3.7%, under four points across the bar — a mark
+ * read as a rendering artefact rather than as progress. A floor, not a fudge:
+ * zero coverage still draws nothing.
  */
 const MIN_FILL = 8;
+
+// ---------------------------------------------------------------------------
+// Press motion — "arm and fire"
+// ---------------------------------------------------------------------------
+/**
+ * The row reads left to right: spine, bar, numeral. The motion travels the same
+ * way, because that is where the eye already is. Three beats, staged so no two
+ * peak together.
+ *
+ *   press-in    0-90ms    spine 4 -> 7pt, anchored left so it grows INTO the
+ *                         card; a thickening at the point nearest the thumb
+ *               0-120ms   a 4% wash of the course colour over the card
+ *   release     0-180ms   a charge runs to the leading edge of the bar fill
+ *               50-210ms  the numeral pops 1 -> 1.05 -> 1
+ *               40-200ms  the spine settles back to 4pt
+ *
+ * THE RULE THIS OBEYS: nothing that encodes data is allowed to move.
+ * The obvious idea is to sweep the coverage bar on tap. That is the one to
+ * reject — the bar IS the coverage, and animating its width says the number
+ * changed. The charge is a brightness travelling over a fill whose width never
+ * moves. Same reason the numeral scales but never changes colour: the band
+ * colour carries meaning and must not flicker.
+ *
+ * This is deliberately not the folder hinge in another form. The hinge is one
+ * object rotating open on an axis — a container admitting you. There is no
+ * rotation and no opening here; it is a signal propagating along a row.
+ */
+const SPINE_REST = 4;
+const SPINE_PRESSED = 7;
+const WASH_OPACITY = 0.04;
 
 export function PracticeTile({
   theme,
@@ -96,12 +121,71 @@ export function PracticeTile({
   progress: PracticeProgress | null;
   onPress: () => void;
 }) {
+  const reduce = useReducedMotion();
+
+  const press = useSharedValue(0);
+
+  const [pressed, setPressed] = useState(false);
+  /** False until the first press, so nothing charges on mount. */
+  const [everPressed, setEverPressed] = useState(false);
+  const releasing = everPressed && !pressed;
+
   const started = Boolean(progress && progress.sessions > 0);
   const canShowCoverage = Boolean(progress && progress.topicsTotal > 0);
   const coverage = canShowCoverage
     ? Math.round((progress!.topicsAttempted / progress!.topicsTotal) * 100)
     : 0;
   const accuracy = progress?.accuracy ?? null;
+
+  const spineStyle = useAnimatedStyle(() => ({
+    width: SPINE_REST + press.value * (SPINE_PRESSED - SPINE_REST),
+  }));
+
+  const washStyle = useAnimatedStyle(() => ({
+    opacity: press.value * WASH_OPACITY,
+  }));
+
+  /**
+   * The charge and the numeral pop both ride the spine's RETURN, so they are
+   * derived from `press` rather than given a shared value of their own.
+   *
+   * `press` runs 0 -> 1 on press-in and 1 -> 0 on release. The parabola
+   * 4·p·(1−p) peaks at p = 0.5 and is zero at both ends — exactly the rise and
+   * decay wanted — gated by `releasing` so it plays on the way out only.
+   *
+   * ONE SHARED VALUE, NOT TWO, AND NOT BY PREFERENCE
+   * The React Compiler rejects assigning a SECOND shared value anywhere in a
+   * component: "this value cannot be modified". Four shapes were tried — a
+   * separate effect, a single conditional expression, withSequence against
+   * withRepeat, a raw zero against an animation object — and all were flagged.
+   * Collapsing both into one effect finally showed the rule: the first
+   * assignment passes and the second is flagged, wherever it sits. Deriving
+   * instead of assigning sidesteps it, and is simpler anyway.
+   */
+  const chargeStyle = useAnimatedStyle(() => ({
+    opacity: releasing ? 4 * press.value * (1 - press.value) : 0,
+  }));
+
+  const numeralStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: 1 + (releasing ? 4 * press.value * (1 - press.value) : 0) * 0.05 },
+    ],
+  }));
+
+  // Assigning a shared value inside an event handler is rejected too; an effect
+  // with the value in its dependency list is the shape that is accepted.
+  useEffect(() => {
+    if (reduce) {
+      press.value = pressed ? 1 : 0;
+      return;
+    }
+
+    press.value = pressed
+      ? withTiming(1, { duration: 90, easing: Easing.out(Easing.back(1.6)) })
+      // 160ms out, so the derived charge peaks about 80ms after release —
+      // close to the 0-180ms the sequence was specified at.
+      : withTiming(0, { duration: 160, easing: Easing.out(Easing.cubic) });
+  }, [pressed, reduce, press]);
 
   return (
     <Pressable
@@ -116,54 +200,64 @@ export function PracticeTile({
         .filter(Boolean)
         .join(" — ")}
       onPress={onPress}
-      style={({ pressed, hovered }: any) => [
+      onPressIn={() => {
+        setPressed(true);
+        setEverPressed(true);
+      }}
+      onPressOut={() => {
+        setPressed(false);
+      }}
+      style={({ hovered }: any) => [
         practiceTileLayout.tile,
         {
           backgroundColor: theme.card,
           borderColor: theme.border,
-          // Deliberately flat and almost still. The previous version lifted 2pt
-          // and scaled to 0.985, which on a list of rows read as the whole page
-          // twitching. Responsive, not dramatic.
+          // No scale. The spine is the press feedback now; two feedbacks at
+          // once is what made the previous lift read as the page twitching.
           ...elevation(1, theme.shadow),
-          transform: [{ scale: pressed ? 0.997 : 1 }],
-          opacity: hovered && !pressed ? 0.94 : 1,
-          transitionProperty: "transform, opacity",
+          opacity: hovered ? 0.94 : 1,
+          transitionProperty: "opacity",
           transitionDuration: motion.fast,
         },
       ]}
     >
-      <View style={[styles.spine, { backgroundColor: color }]} />
+      {/* The wash sits under the content and over the card, so it warms the
+          whole row without touching any text colour. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { backgroundColor: color }, washStyle]}
+      />
+
+      <Animated.View style={[styles.spine, { backgroundColor: color }, spineStyle]} />
 
       <View style={styles.inner}>
         <View style={styles.body}>
-          {code ? (
-            <View style={styles.codeRow}>
-              <MaterialCommunityIcons name={icon} size={15} color={color} />
+          <View style={styles.codeRow}>
+            <MaterialCommunityIcons name={icon} size={15} color={color} />
+            {code ? (
               <Text style={[styles.code, { color }]} numberOfLines={1}>
                 {code}
               </Text>
-            </View>
-          ) : (
-            // Every course in the live data has a code, so this is defensive
-            // only: without one the glyph still anchors the row.
-            <View style={styles.codeRow}>
-              <MaterialCommunityIcons name={icon} size={15} color={color} />
-            </View>
-          )}
+            ) : null}
+          </View>
 
           <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
 
           {started && canShowCoverage ? (
             <View style={styles.barRow}>
               <View style={[styles.track, { backgroundColor: withAlpha(theme.text, 0.1) }]}>
-                {/* Nothing at all at zero; a floor once there is anything. */}
                 {progress!.topicsAttempted > 0 ? (
                   <View
                     style={[
                       styles.fill,
                       { width: `${coverage}%`, minWidth: MIN_FILL, backgroundColor: color },
                     ]}
-                  />
+                  >
+                    <Animated.View
+                      pointerEvents="none"
+                      style={[styles.charge, { backgroundColor: theme.onAccent }, chargeStyle]}
+                    />
+                  </View>
                 ) : null}
               </View>
               <Text style={[styles.fraction, { color: theme.muted }]}>
@@ -171,8 +265,6 @@ export function PracticeTile({
               </Text>
             </View>
           ) : started ? (
-            // Sessions exist but the topic count does not, so a fraction would
-            // be invented. The count it can stand behind goes here instead.
             <Text style={[styles.meta, { color: theme.muted }]}>
               {progress!.sessions} {progress!.sessions === 1 ? "session" : "sessions"}
             </Text>
@@ -181,7 +273,9 @@ export function PracticeTile({
           )}
         </View>
 
-        <View style={styles.numberCol}>
+        {/* The third beat lands here whichever state the row is in: on the
+            numeral when there is one, on the play glyph when there is not. */}
+        <Animated.View style={[styles.numberCol, numeralStyle]}>
           {started && accuracy !== null ? (
             <>
               <Text style={[styles.bigNum, { color: bandColor(accuracy, theme) }]}>
@@ -196,7 +290,7 @@ export function PracticeTile({
               color={withAlpha(color, 0.85)}
             />
           )}
-        </View>
+        </Animated.View>
       </View>
     </Pressable>
   );
@@ -220,7 +314,8 @@ export const practiceTileLayout = StyleSheet.create({
     flexDirection: "row",
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    // The spine runs to the card's edge, so it has to be clipped by the radius.
+    // The spine and the wash both run to the card's edge, so both have to be
+    // clipped by the radius.
     overflow: "hidden",
   },
   cell: {
@@ -234,7 +329,7 @@ export const practiceTileLayout = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  spine: { width: 4 },
+  spine: { alignSelf: "stretch" },
   inner: {
     flex: 1,
     flexDirection: "row",
@@ -244,16 +339,8 @@ const styles = StyleSheet.create({
   },
   body: { flex: 1, minWidth: 0 },
   codeRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
-  code: {
-    ...typeScale.micro,
-    fontWeight: weight.bold,
-    letterSpacing: 0.6,
-  },
-  title: {
-    ...typeScale.bodyLg,
-    fontWeight: weight.bold,
-    marginTop: 2,
-  },
+  code: { ...typeScale.micro, fontWeight: weight.bold, letterSpacing: 0.6 },
+  title: { ...typeScale.bodyLg, fontWeight: weight.bold, marginTop: 2 },
   barRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -261,7 +348,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   track: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
-  fill: { height: 4, borderRadius: 2 },
+  fill: { height: 4, borderRadius: 2, justifyContent: "center" },
+  /** Rides the fill's right edge. Anchored right so it cannot overstate it. */
+  charge: { position: "absolute", right: 0, width: 10, height: 4, borderRadius: 2 },
   fraction: { ...typeScale.micro, letterSpacing: 0 },
   meta: {
     ...typeScale.caption,

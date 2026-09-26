@@ -157,6 +157,28 @@ const FADE_STEPS = [0.92, 0.72, 0.48, 0.26, 0.1, 0];
 const FADE_HEIGHT = 24;
 
 /** Shim over the shared resolver, keeping the existing call shape. */
+/** Ceiling on the question pool pulled down to sample from. */
+const FETCH_CAP = 500;
+
+/**
+ * Fisher-Yates, not `sort(() => Math.random() - 0.5)`.
+ *
+ * That idiom was what this replaced and it is not a shuffle: comparison
+ * sorts assume a consistent comparator, and a random one leaves the result
+ * measurably biased toward the original order. It matters more now that the
+ * shuffle decides which questions a student sees, not just their order.
+ */
+function shuffle<T>(items: T[]): T[] {
+  const out = [...items];
+
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+
+  return out;
+}
+
 function getCourseTheme(courseOrCode: Course | string, title = "") {
   const course = typeof courseOrCode === "string" ? null : courseOrCode;
   const probe = course ?? { code: typeof courseOrCode === "string" ? courseOrCode : "", title };
@@ -305,6 +327,14 @@ export default function Practice() {
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
 
   const [questionCountInput, setQuestionCountInput] = useState("20");
+  /**
+   * No longer editable: the setup screen asks for minutes alone, up to 180.
+   * Two steppers for one decision was half of why that screen was hard to read.
+   *
+   * Kept, rather than deleted, because `getDurationSeconds` still reads it and
+   * a session saved before this change may carry a non-zero value. Dropping it
+   * would silently turn a restored 1h 30m session into 30m.
+   */
   const [hoursInput, setHoursInput] = useState("0");
   const [minutesInput, setMinutesInput] = useState("30");
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
@@ -334,6 +364,12 @@ export default function Practice() {
    * topics banner starts. Null means the ordinary one-topic session.
    */
   const [sessionTopicIds, setSessionTopicIds] = useState<string[] | null>(null);
+  /**
+   * How many questions the chosen topic(s) actually hold. Null while it is
+   * being counted — which is NOT the same as zero, and the setup screen
+   * distinguishes the two rather than claiming an empty topic mid-load.
+   */
+  const [availableCount, setAvailableCount] = useState<number | null>(null);
   const [practiceAlert, setPracticeAlert] = useState<PracticeAlertState>({
     visible: false,
     type: "info",
@@ -707,6 +743,39 @@ export default function Practice() {
     setSessionTopicIds(null);
     setSelectedTopic(topic);
     setScreen("setup");
+    countAvailable([topic.id]);
+  }
+
+  /**
+   * Counts the questions behind this session before anything is configured.
+   *
+   * Two hundred of the project's two hundred and one topics currently hold
+   * none, and until now the only way to discover that was to set four
+   * controls, press Start, and be told. A head count is one cheap request
+   * and it moves that discovery to the top of the screen.
+   */
+  async function countAvailable(topicIds: string[]) {
+    setAvailableCount(null);
+
+    if (!selectedCourse || !isUuid(selectedCourse.id) || topicIds.length === 0) {
+      setAvailableCount(0);
+      return;
+    }
+
+    const { count, error } = await supabase
+      .from("questions")
+      .select("id", { count: "exact", head: true })
+      .eq("course_id", selectedCourse.id)
+      .in("topic_id", topicIds);
+
+    // A failed count is not an empty topic. Left null, the screen shows the
+    // controls without a figure rather than announcing there is nothing here.
+    if (error) {
+      console.log("QUESTION COUNT ERROR:", error.message);
+      return;
+    }
+
+    setAvailableCount(count ?? 0);
   }
 
   /**
@@ -725,6 +794,7 @@ export default function Practice() {
     // everywhere it is displayed.
     setSelectedTopic(null);
     setScreen("setup");
+    countAvailable(ids);
   }
 
   function resumeSavedSession() {
@@ -803,7 +873,17 @@ export default function Practice() {
         ? query.in("topic_id", sessionTopicIds)
         : query.eq("topic_id", selectedTopic!.id);
 
-      const { data, error } = await query.limit(limit);
+      // NOT `.limit(limit)`. The limit used to be applied by the database and
+      // the shuffle afterwards, in JS — so a topic of fifty with a limit of
+      // twenty returned the SAME twenty every time, merely reordered, and the
+      // other thirty were unreachable however many sessions were run. The
+      // toggle said "shuffle questions" and shuffled only their order.
+      //
+      // The pool is fetched whole and sampled here instead. Capped, because a
+      // topic could grow: FETCH_CAP is far above any real topic today (the
+      // largest holds fifty) and keeps one runaway topic from pulling
+      // thousands of rows into the client.
+      const { data, error } = await query.limit(FETCH_CAP);
 
       if (error) {
         setLoading(false);
@@ -828,9 +908,14 @@ export default function Practice() {
       return;
     }
 
+    // Sample, then trim. Shuffling picks WHICH questions as well as their
+    // order; with it off the first N come back in a stable order, which is
+    // what repeating one set until it sticks needs.
     if (shuffleQuestions) {
-      loadedQuestions = [...loadedQuestions].sort(() => Math.random() - 0.5);
+      loadedQuestions = shuffle(loadedQuestions);
     }
+
+    loadedQuestions = loadedQuestions.slice(0, limit);
 
     setQuestions(loadedQuestions);
     setLoading(false);
@@ -1460,115 +1545,162 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   }
 
   if (screen === "setup") {
+    // What the session will ACTUALLY contain. The old summary echoed the number
+    // typed into the stepper, so asking for fifty on a twelve-question topic
+    // promised fifty and delivered twelve.
+    const asked = getQuestionLimit();
+    const actual = availableCount === null ? asked : Math.min(asked, availableCount);
+    const minutes = Math.round(getDurationSeconds() / 60);
+
+    const sessionName = selectedTopic?.title
+      ?? (sessionTopicIds?.length ? `${sessionTopicIds.length} weak topics` : "Practice");
+
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}>
+        <ScrollView
+          contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.headerRow}>
             <BackButton theme={theme} onPress={() => setScreen("topics")} />
 
             <View style={styles.flex1}>
-              <Text style={[styles.pageTitle, { color: theme.text }]}>Session setup</Text>
+              {/* The topic leads, not the words "Session setup" — those were the
+                  same on every screen and named nothing. */}
+              <Text style={[styles.pageTitle, { color: theme.text }]} numberOfLines={2}>
+                {sessionName}
+              </Text>
               <Text style={[styles.pageSubline, { color: theme.muted }]}>
-                {selectedCourse?.code} · {selectedTopic?.title}
+                {selectedCourse?.code}
+                {availableCount === null
+                  ? ""
+                  : ` · ${availableCount} question${availableCount === 1 ? "" : "s"} available`}
               </Text>
             </View>
           </View>
 
-          {/* One "Format" section, matching exam's setup screen. These were
-              two sections — "Questions" and "Duration" — which meant two cards
-              and two shadows for what is a single decision about the shape of
-              the session. */}
-          <ListSection theme={theme} title="Format" inset={dividerInset.none}>
-            <ListRow
-              theme={theme}
-              label="How many"
-              accessory={
-                <Stepper
-                  theme={theme}
+          {availableCount === 0 ? (
+            // Said BEFORE anything is configured. Two hundred of the project's
+            // two hundred and one topics are in this state, and the old screen
+            // only admitted it after four controls had been set and Start
+            // pressed.
+            <>
+              <View style={[styles.setupEmpty, { backgroundColor: withAlpha(theme.warning, 0.12) }]}>
+                <MaterialCommunityIcons name="help-circle-outline" size={20} color={theme.warning} />
+                <View style={styles.flex1}>
+                  <Text style={[styles.setupEmptyTitle, { color: theme.text }]}>
+                    No questions here yet
+                  </Text>
+                  <Text style={[styles.setupEmptyText, { color: theme.muted }]}>
+                    Nothing has been added for this topic. Try another topic, or come back later.
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => setScreen("topics")}
+                style={[styles.setupSecondary, { borderColor: theme.border }]}
+              >
+                <Text style={[styles.setupSecondaryText, { color: theme.text }]}>
+                  Pick another topic
+                </Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <View style={[styles.setupCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                {/* Label and control share the top line; the hint takes the full
+                    width beneath. Side by side the Stepper squeezes the text to
+                    about 80pt — which is why the old rows rendered "How many" as
+                    "Ho..." and "Minutes" as "Min...". */}
+                <View style={[styles.setupRow, { borderColor: theme.border }]}>
+                  <View style={styles.setupRowTop}>
+                    <Text style={[styles.setupLabel, { color: theme.text }]}>Questions</Text>
+                    <Stepper
+                      theme={theme}
+                      color={selectedTheme.color}
+                      value={questionCountInput}
+                      onChangeText={setQuestionCountInput}
+                      step={5}
+                      min={1}
+                      // Capped at what exists, so the stepper cannot be walked
+                      // up to a number the topic could never supply.
+                      max={availableCount ?? 200}
+                      placeholder="20"
+                    />
+                  </View>
+                  <Text style={[styles.setupHint, { color: theme.muted }]}>
+                    {availableCount === null
+                      ? "Counting how many this topic has…"
+                      : `Drawn at random from the ${availableCount} in this topic.`}
+                  </Text>
+                </View>
+
+                <View style={[styles.setupRow, { borderColor: theme.border }]}>
+                  <View style={styles.setupRowTop}>
+                    <Text style={[styles.setupLabel, { color: theme.text }]}>Minutes</Text>
+                    <Stepper
+                      theme={theme}
+                      color={selectedTheme.color}
+                      value={minutesInput}
+                      onChangeText={setMinutesInput}
+                      step={5}
+                      min={5}
+                      max={180}
+                      placeholder="30"
+                    />
+                  </View>
+                  <Text style={[styles.setupHint, { color: theme.muted }]}>
+                    The session submits itself when the time runs out.
+                  </Text>
+                </View>
+
+                <View style={[styles.setupRow, { borderColor: theme.border }]}>
+                  <View style={styles.setupRowTop}>
+                    <Text style={[styles.setupLabel, { color: theme.text }]}>
+                      Different questions each time
+                    </Text>
+                    <Switch
+                      value={shuffleQuestions}
+                      onValueChange={setShuffleQuestions}
+                      trackColor={{ false: theme.soft, true: selectedTheme.color }}
+                      thumbColor={theme.card}
+                      ios_backgroundColor={theme.soft}
+                    />
+                  </View>
+                  <Text style={[styles.setupHint, { color: theme.muted }]}>
+                    Off, you get the same set in the same order — useful for repeating one set until it sticks.
+                  </Text>
+                </View>
+              </View>
+
+              <View
+                style={[
+                  styles.summaryStrip,
+                  { backgroundColor: withAlpha(selectedTheme.color, isDark ? 0.2 : 0.12) },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name="play-circle-outline"
+                  size={20}
                   color={selectedTheme.color}
-                  value={questionCountInput}
-                  onChangeText={setQuestionCountInput}
-                  step={5}
-                  min={1}
-                  max={200}
-                  placeholder="20"
                 />
-              }
-            />
+                <Text style={[styles.summaryStripText, { color: theme.text }]}>
+                  {actual} question{actual === 1 ? "" : "s"} · {minutes} min · ends itself
+                </Text>
+              </View>
 
-            <ListRow
-              theme={theme}
-              label="Shuffle questions"
-              accessory={
-                <Switch
-                  value={shuffleQuestions}
-                  onValueChange={setShuffleQuestions}
-                  trackColor={{ false: theme.soft, true: selectedTheme.color }}
-                  thumbColor={theme.card}
-                  ios_backgroundColor={theme.soft}
-                />
-              }
-            />
-
-            <ListRow
-              theme={theme}
-              label="Hours"
-              accessory={
-                <Stepper
-                  theme={theme}
-                  color={selectedTheme.color}
-                  value={hoursInput}
-                  onChangeText={setHoursInput}
-                  min={0}
-                  max={6}
-                  placeholder="0"
-                />
-              }
-            />
-
-            <ListRow
-              theme={theme}
-              label="Minutes"
-              accessory={
-                <Stepper
-                  theme={theme}
-                  color={selectedTheme.color}
-                  value={minutesInput}
-                  onChangeText={setMinutesInput}
-                  step={5}
-                  min={0}
-                  max={59}
-                  placeholder="30"
-                />
-              }
-            />
-          </ListSection>
-
-          <View
-            style={[
-              styles.summaryStrip,
-              { backgroundColor: withAlpha(selectedTheme.color, isDark ? 0.2 : 0.12) },
-            ]}
-          >
-            <MaterialCommunityIcons
-              name="clock-check-outline"
-              size={20}
-              color={selectedTheme.color}
-            />
-            <Text style={[styles.summaryStripText, { color: theme.text }]}>
-              {getQuestionLimit()} questions · {formatTime(getDurationSeconds())}
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            onPress={() => setScreen("confirm")}
-            style={[styles.primaryButton, { backgroundColor: selectedTheme.color }]}
-          >
-            <MaterialCommunityIcons name="play" size={22} color={theme.onAccent} />
-            <Text style={[styles.primaryText, { color: theme.onAccent }]}>
-              Start practice
-            </Text>
-          </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setScreen("confirm")}
+                style={[styles.primaryButton, { backgroundColor: selectedTheme.color }]}
+              >
+                <MaterialCommunityIcons name="play" size={22} color={theme.onAccent} />
+                <Text style={[styles.primaryText, { color: theme.onAccent }]}>
+                  Start practice
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </ScrollView>
       </View>
     );
@@ -2348,6 +2480,35 @@ const styles = StyleSheet.create({
   cardGlow: { position: "absolute", width: 145, height: 145, borderRadius: 75, right: -66, top: -66, opacity: 0.72 },
   iconBox: { width: 56, height: 56, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   list: { gap: 14 },
+
+  // --- session setup ---
+  setupCard: { borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
+  setupRow: { padding: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth },
+  setupRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+  },
+  setupLabel: { flexShrink: 1, ...typeScale.body, fontWeight: weight.semi },
+  setupHint: { ...typeScale.micro, marginTop: 6, lineHeight: 16 },
+  setupEmpty: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "flex-start",
+    padding: spacing.md,
+    borderRadius: radius.md,
+  },
+  setupEmptyTitle: { ...typeScale.body, fontWeight: weight.bold },
+  setupEmptyText: { ...typeScale.micro, marginTop: 3, lineHeight: 15 },
+  setupSecondary: {
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing.md,
+  },
+  setupSecondaryText: { ...typeScale.body, fontWeight: weight.semi },
 
   // --- topics screen ---
   weakBanner: {

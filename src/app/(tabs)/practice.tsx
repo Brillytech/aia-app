@@ -1629,11 +1629,14 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                       placeholder="20"
                     />
                   </View>
-                  <Text style={[styles.setupHint, { color: theme.muted }]}>
-                    {availableCount === null
-                      ? "Counting how many this topic has…"
-                      : `Drawn at random from the ${availableCount} in this topic.`}
-                  </Text>
+                  {/* No hint once the count is known: the subline already
+                      says how many exist and the stepper caps at it, so a line
+                      here would be the same fact a third time. The counting
+                      state stays only because it is transient and explains why
+                      the cap is briefly absent. */}
+                  {availableCount === null ? (
+                    <Text style={[styles.setupHint, { color: theme.muted }]}>Counting…</Text>
+                  ) : null}
                 </View>
 
                 <View style={[styles.setupRow, { borderColor: theme.border }]}>
@@ -1650,9 +1653,10 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                       placeholder="30"
                     />
                   </View>
-                  <Text style={[styles.setupHint, { color: theme.muted }]}>
-                    The session submits itself when the time runs out.
-                  </Text>
+                  {/* Kept short rather than dropped. The summary strip also
+                      says "ends itself", but a session ending on its own is the
+                      one surprise here worth stating twice. */}
+                  <Text style={[styles.setupHint, { color: theme.muted }]}>Auto-submits at zero</Text>
                 </View>
 
                 <View style={[styles.setupRow, { borderColor: theme.border }]}>
@@ -1668,9 +1672,10 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                       ios_backgroundColor={theme.soft}
                     />
                   </View>
-                  <Text style={[styles.setupHint, { color: theme.muted }]}>
-                    Off, you get the same set in the same order — useful for repeating one set until it sticks.
-                  </Text>
+                  {/* The one genuinely non-obvious control, so it keeps a
+                      hint — but only the fact. Explaining why someone might
+                      want a repeatable set was the app talking about itself. */}
+                  <Text style={[styles.setupHint, { color: theme.muted }]}>Off: same set, same order.</Text>
                 </View>
               </View>
 

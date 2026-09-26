@@ -245,7 +245,11 @@ export function PracticeTile({
 
           {started && canShowCoverage ? (
             <View style={styles.barRow}>
-              <View style={[styles.track, { backgroundColor: withAlpha(theme.text, 0.1) }]}>
+              <View style={[styles.track, { backgroundColor: withAlpha(theme.text, 0.09) }]}>
+                {/* Sits under the fill, so a filled bar covers its own groove
+                    and only the empty remainder shows the recess. */}
+                <View style={[styles.groove, { backgroundColor: withAlpha(theme.text, 0.07) }]} />
+
                 {progress!.topicsAttempted > 0 ? (
                   <View
                     style={[
@@ -347,10 +351,38 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.sm,
   },
-  track: { flex: 1, height: 4, borderRadius: 2, overflow: "hidden" },
-  fill: { height: 4, borderRadius: 2, justifyContent: "center" },
+  /**
+   * BAR GEOMETRY — 6pt, not 4.
+   *
+   * The bar read as dry, and mockups against real courses showed the fix was
+   * entirely geometric. At 4pt with a 2pt radius the ends are barely curved and
+   * the whole thing reads as a hairline; at 6pt with a 3pt radius it is a true
+   * capsule and an object in its own right.
+   *
+   * It also rescues the minimum-fill case: one topic of twenty-seven floors to
+   * 8pt, which at 4pt tall looked like a dash and at 6pt reads as a deliberate
+   * pill.
+   *
+   * NO GRADIENT, DELIBERATELY. A two-stop vertical gradient inside the fill was
+   * proposed and built, and three strengths — none, 0.22, 0.40 — were rendered
+   * side by side against the same courses. They are indistinguishable: 6pt is
+   * not enough vertical room for a gradient to read. It would have cost an SVG
+   * layer, a Defs block and a gradient id per tile for no visible return.
+   *
+   * A coloured glow behind the fill was also tried and rejected: invisible
+   * against a white card in light mode, and only present in dark, where it
+   * started to look gamified.
+   *
+   * The WIDTH is untouched by all of this. It encodes coverage and is never
+   * adjusted for a visual effect — the same rule the press animation obeys.
+   */
+  track: { flex: 1, height: 6, borderRadius: 3, overflow: "hidden" },
+  /** A hairline inside the top edge, so the empty part reads as a recess
+   *  rather than as a grey gap. */
+  groove: { position: "absolute", left: 0, right: 0, top: 0, height: 1 },
+  fill: { height: 6, borderRadius: 3, justifyContent: "center" },
   /** Rides the fill's right edge. Anchored right so it cannot overstate it. */
-  charge: { position: "absolute", right: 0, width: 10, height: 4, borderRadius: 2 },
+  charge: { position: "absolute", right: 0, width: 10, height: 6, borderRadius: 3 },
   fraction: { ...typeScale.micro, letterSpacing: 0 },
   meta: {
     ...typeScale.caption,

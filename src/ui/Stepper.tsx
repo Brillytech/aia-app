@@ -98,7 +98,21 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   input: {
-    minWidth: 42,
+    /**
+     * A WIDTH, not a minWidth.
+     *
+     * This was `minWidth: 42`, which sets a floor and leaves the width to the
+     * element — and on react-native-web a TextInput is an <input>, whose
+     * default intrinsic width is about twenty characters. Measured in a real
+     * browser it came out at 221px, making the whole stepper 289px: wider than
+     * the row it sits in. The "+" is the last child, so it was the one pushed
+     * past the card's edge and clipped by its overflow: hidden.
+     *
+     * It looked like a missing button and was a missing constraint. 52 holds
+     * three digits centred, which covers every max in the app (200 questions,
+     * 180 minutes).
+     */
+    width: 52,
     textAlign: "center",
     ...type.bodyLg,
     fontWeight: weight.bold,

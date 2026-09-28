@@ -13,9 +13,8 @@ import {
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 // This file already uses React Native's Animated for its fade/slide values,
 // so Reanimated comes in under its own name — the CSS-transition props are a
@@ -24,38 +23,37 @@ import Reanimated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ViewShot from "react-native-view-shot";
 import { supabase } from "../../../lib/supabase";
-import { sessionUser } from "../../session";
 import { courseCode, sortCoursesAlphabetically } from "../../courses";
 import { notifyAndPopup } from "../../notify";
-import { practiceStreak } from "../../practiceStreak";
 import { loadPracticeHistory, type PracticeHistory } from "../../practiceHistory";
-import { loadTopicHistory, weakTopicIds, WEAK_THRESHOLD, type TopicHistory } from "../../topicHistory";
-import { Segmented } from "../../ui/Segmented";
-import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
+import { practiceStreak } from "../../practiceStreak";
 import { useScreenTime } from "../../screen-time";
+import { sessionUser } from "../../session";
 import { category, Theme, useThemeMode } from "../../theme";
-import { useContentInset } from "../../ui/layout/breakpoints";
+import { loadTopicHistory, WEAK_THRESHOLD, weakTopicIds, type TopicHistory } from "../../topicHistory";
 import { AlertModal } from "../../ui/AlertModal";
-import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
-import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
-import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Card } from "../../ui/Card";
-import { Folder } from "../../ui/Folder";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
+import { useContentInset, useIsDesktop } from "../../ui/layout/breakpoints";
+import { useMeasure } from "../../ui/layout/measure";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
+import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
+import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
+import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
+import { Segmented } from "../../ui/Segmented";
+import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Stepper } from "../../ui/Stepper";
-import { useCollapse } from "../../ui/useCollapse";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import {
   layout,
-  motion as motionTokens,
   radius,
   spacing,
   type as typeScale,
   weight,
-  withAlpha,
+  withAlpha
 } from "../../ui/tokens";
+import { useCollapse } from "../../ui/useCollapse";
 
 type Course = {
   id: string;
@@ -157,6 +155,25 @@ const FADE_STEPS = [0.92, 0.72, 0.48, 0.26, 0.1, 0];
 const FADE_HEIGHT = 24;
 
 /** Shim over the shared resolver, keeping the existing call shape. */
+/**
+ * The question screen's bottom bar, derived rather than guessed.
+ *
+ * It used to sit at a hardcoded `bottom: 92` with the scroll reserving a
+ * hardcoded 230. Neither number came from anything: 92 was an eyeballed
+ * allowance for the floating tab bar and ignored the safe-area inset entirely,
+ * and on desktop — where the navigation is a SIDEBAR and there is no bottom bar
+ * at all — it left the nav floating in the middle of the screen with content
+ * running underneath it.
+ *
+ * The tab bar's own geometry is 64 tall with an 18pt centre lift, sitting at
+ * `max(insets.bottom, 12)`. See ui/TabBar.tsx.
+ */
+const TAB_BAR_BLOCK = 64 + 18;
+/** Height of the question nav bar itself: its padding plus the tallest control. */
+const ENGINE_BAR_HEIGHT = 72;
+/** Breathing room between the last option and the bar. */
+const ENGINE_BAR_GAP = 24;
+
 /** Ceiling on the question pool pulled down to sample from. */
 const FETCH_CAP = 500;
 
@@ -316,6 +333,9 @@ function calculatePracticeXp({
 
 export default function Practice() {
   const contentInset = useContentInset();
+  const desktop = useIsDesktop();
+  /** The app's own reading measure. Null below 1024, where the 480 column caps. */
+  const proseMeasure = useMeasure("prose");
   const { theme, isDark } = useThemeMode();
 
   const [screen, setScreen] = useState<Screen>("courses");
@@ -1654,7 +1674,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                     />
                   </View>
                   {/* Kept short rather than dropped. The summary strip also
-                      says "ends itself", but a session ending on its own is the
+                      says "Auto-submits", but a session ending on its own is the
                       one surprise here worth stating twice. */}
                   <Text style={[styles.setupHint, { color: theme.muted }]}>Auto-submits at zero</Text>
                 </View>
@@ -1691,7 +1711,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                   color={selectedTheme.color}
                 />
                 <Text style={[styles.summaryStripText, { color: theme.text }]}>
-                  {actual} question{actual === 1 ? "" : "s"} · {minutes} min · ends itself
+                  {actual} question{actual === 1 ? "" : "s"} · {minutes} min · Auto-submits
                 </Text>
               </View>
 
@@ -1798,6 +1818,15 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   }
 
   if (screen === "engine" && currentQuestion) {
+    // Derived, not guessed. On desktop the navigation is a sidebar, so there is
+    // no bottom bar to clear and the nav sits just above the edge; on a phone it
+    // has to clear the floating tab bar AND the home indicator.
+    const barBottom = desktop
+      ? Math.max(insets.bottom, 16)
+      : Math.max(insets.bottom, 12) + TAB_BAR_BLOCK + 12;
+    // What the scroll must reserve so the last option can always be brought
+    // clear of the bar. This is the number that was hardcoded to 230.
+    const engineReserve = barBottom + ENGINE_BAR_HEIGHT + ENGINE_BAR_GAP;
     const options = [["A", currentQuestion.option_a], ["B", currentQuestion.option_b], ["C", currentQuestion.option_c], ["D", currentQuestion.option_d], ["E", currentQuestion.option_e]].filter(([, value]) => value);
     // Typed as a percentage rather than a bare string, which TS otherwise
     // widens and refuses against DimensionValue.
@@ -1825,8 +1854,8 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             ]}
           />
         </View>
-        <ScrollView contentContainerStyle={styles.engineScroll}>
-          <Animated.View style={{ opacity: fade, transform: [{ translateY: slide }] }}>
+        <ScrollView contentContainerStyle={[styles.engineScroll, { paddingBottom: engineReserve }]}>
+          <Animated.View style={[{ opacity: fade, transform: [{ translateY: slide }] }, proseMeasure]}>
             {/* The counter lives in the bottom bar and the progress bar above;
                 repeating it here was a third copy of the same fact. */}
             <Text style={[styles.questionText, { color: theme.text }]}>
@@ -1860,76 +1889,72 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
               })}
             </View>
 
-            {/* One grouped container with dividers, matching study — the old
-                version drew a separate bordered card per option, and gave each
-                one a radio AND a letter doing the same job. */}
-            <View style={[styles.optionsWrap, { backgroundColor: theme.card }]}>
-              {options.map(([letter, value], index) => {
+            {/* FOCUS: no card, no border, no grouped box.
+                Each option is a full-width tap target whose only furniture is
+                its letter. The previous version had it both ways — a grouped
+                container WITH dividers, and every row still carrying
+                borderWidth 1 and borderRadius 22 from the card design its own
+                comment said had been removed.
+
+                Colour appears only to say something. A resting option has
+                none; the one you picked carries the course colour. Correct and
+                wrong are not shown here at all — this screen is the sitting of
+                the paper, and the answer belongs to Review. */}
+            <View nativeID="options">
+              {options.map(([letter, value]) => {
                 const selected = answers[currentQuestion.id] === letter;
 
                 return (
-                  <View key={letter}>
-                    {index > 0 ? (
-                      <View
-                        style={[styles.optionDivider, { backgroundColor: theme.border }]}
-                      />
-                    ) : null}
-
-                    <TouchableOpacity
-                      onPress={() => chooseAnswer(currentQuestion.id, letter as string)}
-                      activeOpacity={0.85}
+                  <TouchableOpacity
+                    key={letter}
+                    onPress={() => chooseAnswer(currentQuestion.id, letter as string)}
+                    activeOpacity={0.9}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    style={[
+                      styles.optionRow,
+                      { borderBottomColor: theme.border },
+                      selected
+                        ? { backgroundColor: withAlpha(selectedTheme.color, isDark ? 0.16 : 0.09) }
+                        : null,
+                    ]}
+                  >
+                    <View
                       style={[
-                        styles.optionRow,
-                        {
-                          backgroundColor: selected
-                            ? withAlpha(selectedTheme.color, isDark ? 0.2 : 0.12)
-                            : "transparent",
-                        },
+                        styles.optionBadge,
+                        selected
+                          ? { backgroundColor: selectedTheme.color }
+                          : { borderColor: theme.border, borderWidth: StyleSheet.hairlineWidth },
                       ]}
                     >
-                      <View
+                      <Text
                         style={[
-                          styles.optionBadge,
-                          {
-                            backgroundColor: selected
-                              ? selectedTheme.color
-                              : withAlpha(selectedTheme.color, isDark ? 0.22 : 0.14),
-                          },
+                          styles.optionBadgeText,
+                          { color: selected ? theme.onAccent : theme.muted },
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.optionBadgeText,
-                            { color: selected ? theme.onAccent : selectedTheme.color },
-                          ]}
-                        >
-                          {letter}
-                        </Text>
-                      </View>
-
-                      <Text style={[styles.optionText, { color: theme.text }]}>
-                        {value}
+                        {letter}
                       </Text>
+                    </View>
 
-                      {selected ? (
-                        <MaterialCommunityIcons
-                          name="check-circle"
-                          size={20}
-                          color={selectedTheme.color}
-                        />
-                      ) : null}
-                    </TouchableOpacity>
-                  </View>
+                    <Text style={[styles.optionText, { color: theme.text }]}>{value}</Text>
+                  </TouchableOpacity>
                 );
               })}
             </View>
           </Animated.View>
         </ScrollView>
-        <View style={[styles.bottomNav, { borderTopColor: theme.border, backgroundColor: engineBg }]}>
+        {/* A full-width host with a measured row inside. Left as one
+            edge-to-edge bar, its Previous and Next ended up at the screen edges
+            on a wide display while the content sat in a 680pt column in the
+            middle. */}
+        <View nativeID="navbar" pointerEvents="box-none" style={[styles.bottomNavHost, { bottom: barBottom }]}>
+        <View style={[styles.bottomNav, { borderColor: theme.border, backgroundColor: theme.card }, proseMeasure]}>
           <TouchableOpacity onPress={previousQuestion} disabled={currentIndex === 0} style={[styles.navBtn, { opacity: currentIndex === 0 ? 0.35 : 1 }]}><MaterialCommunityIcons name="chevron-left" size={22} color={theme.text} /><Text style={[styles.navText, { color: theme.text }]}>Previous</Text></TouchableOpacity>
           <TouchableOpacity onPress={() => setNavigatorOpen(true)} style={[styles.questionNavBtn, { borderColor: theme.border }]}><Text style={[styles.navText, { color: theme.text }]}>{currentIndex + 1}/{questions.length}</Text></TouchableOpacity>
           {currentIndex === questions.length - 1 ? <TouchableOpacity onPress={submitPractice} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Submit</Text></TouchableOpacity> : <TouchableOpacity onPress={nextQuestion} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Next</Text><MaterialCommunityIcons name="chevron-right" size={22} color="#FFFFFF" /></TouchableOpacity>}
         </View>
+          </View>
         <QuestionNavigator open={navigatorOpen} setOpen={setNavigatorOpen} questions={questions} answers={answers} flagged={flagged} confidence={confidence} currentIndex={currentIndex} goToQuestion={goToQuestion} theme={theme} panelBg={panelBg} color={selectedTheme.color} />
         {renderPracticeAlert()}
       </View>
@@ -2428,18 +2453,11 @@ const styles = StyleSheet.create({
     height: FADE_HEIGHT,
   },
   headerFadeBand: { flex: 1 },
-  optionsWrap: {
-    borderRadius: radius.lg,
-    overflow: "hidden",
-  },
-  optionDivider: {
-    height: StyleSheet.hairlineWidth,
-    marginLeft: spacing.lg + 30 + spacing.md,
-  },
   optionBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    marginTop: 1,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2592,13 +2610,42 @@ const styles = StyleSheet.create({
   questionHeader: { flexDirection: "row", alignItems: "baseline", marginBottom: 18, gap: 6 },
   questionCounter: { fontSize: 18, fontWeight: "900" },
   questionTotal: { fontSize: 13, fontWeight: "800" },
-  questionText: { fontSize: 21, fontWeight: "900", lineHeight: 31, marginBottom: 24 },
-  optionRow: { borderWidth: 1, borderRadius: 22, padding: 15, flexDirection: "row", alignItems: "center", gap: 12 },
+  // Title weight, not black. At 900 a long stem is eight lines of heavy bold
+  // and reads as a wall; this stays clearly heavier than the options without
+  // shouting the whole paragraph.
+  questionText: { ...typeScale.title, fontSize: 22, lineHeight: 30, marginBottom: spacing.xl },
+  optionRow: {
+    flexDirection: "row",
+    // flex-start, not center: a three-line option should not push its letter
+    // into the middle of the paragraph.
+    alignItems: "flex-start",
+    gap: spacing.md,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   optionRadio: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   radioInner: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#FFFFFF" },
   optionLetter: { fontSize: 16, fontWeight: "900" },
-  optionText: { flex: 1, fontSize: 15, lineHeight: 22 },
-  bottomNav: { position: "absolute", bottom: 92, left: 12, right: 12, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14, borderTopWidth: 1, borderRadius: 26, flexDirection: "row", alignItems: "center", gap: 10, shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
+  optionText: { flex: 1, ...typeScale.bodyLg, fontWeight: weight.regular, lineHeight: 24 },
+  bottomNavHost: { position: "absolute", left: 12, right: 12, alignItems: "center" },
+  bottomNav: {
+    width: "100%",
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 26,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
   navBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 12 },
   navText: { fontWeight: "900" },
   questionNavBtn: { borderWidth: 1, borderRadius: 999, paddingVertical: 12, paddingHorizontal: 18 },

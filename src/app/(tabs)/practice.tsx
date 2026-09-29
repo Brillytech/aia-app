@@ -36,7 +36,6 @@ import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { useContentInset, useIsDesktop } from "../../ui/layout/breakpoints";
-import { useMeasure } from "../../ui/layout/measure";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
 import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
@@ -334,8 +333,6 @@ function calculatePracticeXp({
 export default function Practice() {
   const contentInset = useContentInset();
   const desktop = useIsDesktop();
-  /** The app's own reading measure. Null below 1024, where the 480 column caps. */
-  const proseMeasure = useMeasure("prose");
   const { theme, isDark } = useThemeMode();
 
   const [screen, setScreen] = useState<Screen>("courses");
@@ -1855,7 +1852,11 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
           />
         </View>
         <ScrollView contentContainerStyle={[styles.engineScroll, { paddingBottom: engineReserve }]}>
-          <Animated.View style={[{ opacity: fade, transform: [{ translateY: slide }] }, proseMeasure]}>
+          {/* Fills the width, left-aligned. A centred reading measure was
+              tried here and rejected on sight: a CBT paper is a working
+              surface, not an article, and the space either side read as the
+              screen being unfinished rather than as considered restraint. */}
+          <Animated.View style={{ opacity: fade, transform: [{ translateY: slide }] }}>
             {/* The counter lives in the bottom bar and the progress bar above;
                 repeating it here was a third copy of the same fact. */}
             <Text style={[styles.questionText, { color: theme.text }]}>
@@ -1949,7 +1950,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             on a wide display while the content sat in a 680pt column in the
             middle. */}
         <View nativeID="navbar" pointerEvents="box-none" style={[styles.bottomNavHost, { bottom: barBottom }]}>
-        <View style={[styles.bottomNav, { borderColor: theme.border, backgroundColor: theme.card }, proseMeasure]}>
+        <View style={[styles.bottomNav, { borderColor: theme.border, backgroundColor: theme.card }]}>
           <TouchableOpacity onPress={previousQuestion} disabled={currentIndex === 0} style={[styles.navBtn, { opacity: currentIndex === 0 ? 0.35 : 1 }]}><MaterialCommunityIcons name="chevron-left" size={22} color={theme.text} /><Text style={[styles.navText, { color: theme.text }]}>Previous</Text></TouchableOpacity>
           <TouchableOpacity onPress={() => setNavigatorOpen(true)} style={[styles.questionNavBtn, { borderColor: theme.border }]}><Text style={[styles.navText, { color: theme.text }]}>{currentIndex + 1}/{questions.length}</Text></TouchableOpacity>
           {currentIndex === questions.length - 1 ? <TouchableOpacity onPress={submitPractice} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Submit</Text></TouchableOpacity> : <TouchableOpacity onPress={nextQuestion} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Next</Text><MaterialCommunityIcons name="chevron-right" size={22} color="#FFFFFF" /></TouchableOpacity>}

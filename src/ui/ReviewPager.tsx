@@ -1,20 +1,26 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Dimensions,
-  FlatList,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../theme";
 import { haptics } from "./haptics";
+import { useIsDesktop } from "./layout/breakpoints";
 import { layout, radius, spacing, type, weight, withAlpha } from "./tokens";
 
-const { width } = Dimensions.get("window");
+/**
+ * What the tab bar occupies at the bottom of the screen: 82pt tall, sitting
+ * 12pt off the edge. Measured on /(tabs)/practice rather than assumed, because
+ * both screens that use this component live inside (tabs) and the footer below
+ * was padded as though nothing were there.
+ */
+const TAB_BAR_BLOCK = 82;
 
 export type ReviewOption = { key: string; text: string };
 
@@ -69,9 +75,25 @@ export type ReviewItem = {
  *
  * This shows the options themselves, marked in place: the right one filled
  * green, a wrong pick struck through in red. You see what you chose and what
- * was right without decoding letters. One question fills the screen, you swipe
- * between them, and the rail at the top doubles as a score overview and a jump
- * control — the thing a long scroll could never give you.
+ * was right without decoding letters. One question fills the screen, Next
+ * swaps it for the following one, and the rail at the top doubles as a score
+ * overview and a jump control — the thing a long scroll could never give you.
+ *
+ * WHY THERE IS NO PAGER ANY MORE
+ * Questions used to sit in a horizontal `FlatList` with `pagingEnabled`, one
+ * page each, and you swiped between them. That cost more than it gave.
+ *
+ * A horizontal row takes its height from its tallest child, so the vertical
+ * ScrollView inside each page had nothing bounding it: measured at 390x844 it
+ * came out 1053.5pt tall holding 1054pt of content, which is a scroll
+ * container that can never scroll. The pager around it was bounded at 684 with
+ * overflow hidden, so the last 370pt of every long explanation was clipped and
+ * unreachable — no gesture could recover it.
+ *
+ * The page is now a single ScrollView with `flex: 1`, which is what gives it a
+ * box to scroll inside. `key={current.id}` remounts it on every change so each
+ * question opens at its top rather than inheriting the last one's offset —
+ * declarative, so it cannot fall out of step the way a ref and an effect can.
  */
 export function ReviewPager({
   theme,
@@ -85,10 +107,14 @@ export function ReviewPager({
   onExit: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const desktop = useIsDesktop();
+  // Live, not read once at module load. The old module-scope Dimensions call
+  // never updated, so the rail centred against whatever the width had been
+  // when the bundle first ran.
+  const { width } = useWindowDimensions();
   const [index, setIndex] = useState(0);
   const [wrongOnly, setWrongOnly] = useState(false);
 
-  const listRef = useRef<FlatList<ReviewItem>>(null);
   const railRef = useRef<ScrollView>(null);
 
   const visible = useMemo(
@@ -107,6 +133,18 @@ export function ReviewPager({
   const safeIndex = Math.min(index, Math.max(0, visible.length - 1));
   const current = visible[safeIndex];
 
+  /**
+   * Clearance under the footer row.
+   *
+   * Both callers render this inside (tabs), where the tab bar covers the
+   * bottom 94pt of the screen. The footer used to pad by 16 and its buttons
+   * sat underneath the bar. On desktop the navigation is a sidebar and there
+   * is nothing along the bottom, so the allowance is the safe area alone.
+   */
+  const footerBottom = desktop
+    ? Math.max(insets.bottom, spacing.lg)
+    : Math.max(insets.bottom, 12) + TAB_BAR_BLOCK + 12;
+
   // Keeps the active pill in view as you swipe. Centring rather than merely
   // revealing, so you can always see the questions either side of where you
   // are — the rail is a map, not just an indicator.
@@ -115,19 +153,17 @@ export function ReviewPager({
       x: Math.max(0, safeIndex * (PILL + spacing.sm) - width / 2 + PILL),
       animated: true,
     });
-  }, [safeIndex]);
+  }, [safeIndex, width]);
 
   function goTo(nextIndex: number) {
     haptics.tap();
     setIndex(nextIndex);
-    listRef.current?.scrollToIndex({ index: nextIndex, animated: true });
   }
 
   function toggleFilter() {
     haptics.tap();
     setWrongOnly((prev) => !prev);
     setIndex(0);
-    listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }
 
   return (
@@ -188,6 +224,12 @@ export function ReviewPager({
         ref={railRef}
         horizontal
         showsHorizontalScrollIndicator={false}
+        // A ScrollView carries flexGrow: 1 by default, so in a column the rail
+        // competes for height with the page below it. That went unnoticed while
+        // its sibling was a content-sized pager; the moment the page became
+        // flex: 1 the rail took 307pt of it and pushed the question most of the
+        // way down the screen. It is a fixed strip and should never grow.
+        style={styles.railBox}
         contentContainerStyle={styles.rail}
       >
         {visible.map((item, i) => {
@@ -233,26 +275,13 @@ export function ReviewPager({
           </Text>
         </View>
       ) : (
-        <FlatList
-          ref={listRef}
-          data={visible}
-          keyExtractor={(item) => item.id}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          // Fixed page width, so the list never has to measure to know where a
-          // page starts — scrollToIndex from the rail is exact.
-          getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
-          onMomentumScrollEnd={(event) => {
-            const next = Math.round(event.nativeEvent.contentOffset.x / width);
-            if (next !== safeIndex) setIndex(next);
-          }}
-          renderItem={({ item }) => <ReviewPage theme={theme} item={item} />}
-        />
+        // One question, swapped in place. No slide, no pager: Next and the
+        // rail both just move the index.
+        <ReviewPage key={current.id} theme={theme} item={current} />
       )}
 
       {current ? (
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+        <View style={[styles.footer, { paddingBottom: footerBottom }]}>
           <NavButton
             theme={theme}
             icon="chevron-left"
@@ -280,7 +309,11 @@ function ReviewPage({ theme, item }: { theme: Theme; item: ReviewItem }) {
 
   return (
     <ScrollView
-      style={{ width }}
+      // flex: 1, not a width. This is the fix for the cut-off: the box has to
+      // be bounded by its parent for there to be anything to scroll within.
+      // Sized to its content, as it was inside the pager, it simply grew past
+      // the bottom of the screen and took the rest of the question with it.
+      style={styles.pageBox}
       contentContainerStyle={styles.page}
       showsVerticalScrollIndicator={false}
     >
@@ -470,6 +503,7 @@ const styles = StyleSheet.create({
     ...type.micro,
     letterSpacing: 0.3,
   },
+  railBox: { flexGrow: 0, flexShrink: 0 },
   rail: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -487,6 +521,7 @@ const styles = StyleSheet.create({
     ...type.caption,
     letterSpacing: 0,
   },
+  pageBox: { flex: 1 },
   page: {
     paddingHorizontal: layout.screenGutter,
     paddingTop: spacing.md,

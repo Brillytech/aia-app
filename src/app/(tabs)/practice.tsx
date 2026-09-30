@@ -5,7 +5,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Modal,
   Pressable,
@@ -41,6 +40,7 @@ import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
 import { Segmented } from "../../ui/Segmented";
+import { SkeletonBar } from "../../ui/Skeleton";
 import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
 import { Stepper } from "../../ui/Stepper";
 import { subjectColor, subjectIcon } from "../../ui/subject";
@@ -171,7 +171,222 @@ const TAB_BAR_BLOCK = 64 + 18;
 /** Height of the question nav bar itself: its padding plus the tallest control. */
 const ENGINE_BAR_HEIGHT = 72;
 /** Breathing room between the last option and the bar. */
-const ENGINE_BAR_GAP = 24;
+const ENGINE_BAR_GAP = 16;
+
+/**
+ * Loading states, shaped like what is coming.
+ *
+ * Practice had exactly one: a full-screen spinner in a bordered card, gated
+ * ABOVE every screen branch, so the course list, the topic list, fetching
+ * questions, submitting and every retry all showed the same centred disc. The
+ * standing rule across the rest of this app is a content-matching skeleton, and
+ * this screen never followed it.
+ *
+ * Each one mirrors the row it replaces, so the page does not jump when real
+ * content arrives. They share SkeletonBar's sweep driver, which means the whole
+ * screen pulses as one surface rather than each bar keeping its own clock.
+ */
+function PracticeCourseSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <View accessible accessibilityLabel="Loading your courses" style={practiceTileLayout.grid}>
+      {[0, 1, 2, 3].map((i) => (
+        <View key={i} style={[practiceTileLayout.cell, practiceTileLayout.cellFull]}>
+          <View style={[skel.tile, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            {/* 4pt, matching SPINE_REST. Grey rather than the course colour:
+                which course this row will be is exactly what is not known yet. */}
+            <View style={[skel.spine, { backgroundColor: withAlpha(theme.text, 0.2) }]} />
+            <View style={skel.tileInner}>
+              <View style={skel.flex1}>
+                <SkeletonBar theme={theme} width={64} height={10} />
+                <SkeletonBar theme={theme} width={i % 2 ? 186 : 148} height={15} style={skel.gap6} />
+                {/* The coverage bar and its fraction, at the bar's real 6pt. */}
+                <View style={skel.barRow}>
+                  <SkeletonBar theme={theme} width="100%" height={6} rounded={3} style={skel.flex1} />
+                  <SkeletonBar theme={theme} width={26} height={9} />
+                </View>
+              </View>
+              {/* The numeral column. Without it the body stretches the full
+                  width here and snaps 44pt narrower when the tile lands. */}
+              <View style={skel.numberCol}>
+                <SkeletonBar theme={theme} width={34} height={24} rounded={radius.xs} />
+                <SkeletonBar theme={theme} width={30} height={8} style={skel.gap4} />
+              </View>
+            </View>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function PracticeTopicSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <View accessible accessibilityLabel="Loading topics" style={{ borderTopWidth: StyleSheet.hairlineWidth, borderColor: theme.border }}>
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <View key={i} style={[skel.topicRow, { borderColor: theme.border }]}>
+          <View style={[skel.rule, { backgroundColor: withAlpha(theme.text, 0.12) }]} />
+          <View style={skel.flex1}>
+            <SkeletonBar theme={theme} width={i % 3 === 0 ? 232 : i % 3 === 1 ? 168 : 200} height={13} />
+            <SkeletonBar theme={theme} width={74} height={9} style={skel.gap4} />
+          </View>
+          {/* The score pill and the chevron. Only rows with history carry a
+              pill, so it appears on some of these and not others — a uniform
+              column would promise every topic a score. */}
+          {i % 3 === 0 ? <SkeletonBar theme={theme} width={34} height={18} rounded={radius.pill} /> : null}
+          {/* The chevron. Narrow and squared, because a 999-radius block
+              at this size reads as a second badge rather than as a glyph. */}
+          <SkeletonBar theme={theme} width={7} height={13} rounded={2} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Setup and "Ready?" are both a short stack of rows above a button. */
+function PracticeFormSkeleton({ theme, rows }: { theme: Theme; rows: number }) {
+  return (
+    <View accessible accessibilityLabel="Counting the questions in this topic">
+      <SkeletonBar theme={theme} width={172} height={24} />
+      <SkeletonBar theme={theme} width={128} height={12} style={skel.gap8} />
+
+      <View style={[skel.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+        {Array.from({ length: rows }).map((_, i) => (
+          <View key={i} style={[skel.formRow, { borderColor: theme.border }]}>
+            <SkeletonBar theme={theme} width={i % 2 ? 84 : 108} height={13} />
+            <SkeletonBar theme={theme} width={96} height={30} rounded={radius.sm} />
+          </View>
+        ))}
+      </View>
+
+      <SkeletonBar theme={theme} width="100%" height={52} rounded={radius.md} style={skel.gap16} />
+    </View>
+  );
+}
+
+/** The question screen: stem, confidence chips, four option rows. */
+function PracticeQuestionSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <View accessible accessibilityLabel="Preparing your questions" style={skel.question}>
+      <SkeletonBar theme={theme} width="92%" height={20} />
+      <SkeletonBar theme={theme} width="64%" height={20} style={skel.gap8} />
+
+      <View style={skel.chips}>
+        {[58, 44, 66].map((w) => (
+          <SkeletonBar key={w} theme={theme} width={w} height={26} rounded={radius.pill} />
+        ))}
+      </View>
+
+      {[0, 1, 2, 3].map((i) => (
+        <View
+          key={i}
+          style={[skel.optionRow, { backgroundColor: withAlpha(theme.text, 0.035) }]}
+        >
+          <SkeletonBar theme={theme} width={26} height={26} rounded={13} />
+          <SkeletonBar theme={theme} width={i % 2 ? 196 : 148} height={14} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** The result screen: the score hero, three headline numbers, then lists. */
+function PracticeResultSkeleton({ theme }: { theme: Theme }) {
+  return (
+    <View accessible accessibilityLabel="Scoring your session">
+      <View style={skel.hero}>
+        <SkeletonBar theme={theme} width={132} height={44} rounded={radius.xs} />
+        <SkeletonBar theme={theme} width={78} height={12} style={skel.gap8} />
+        <SkeletonBar theme={theme} width={96} height={26} rounded={radius.pill} style={skel.gap10} />
+        <SkeletonBar theme={theme} width="100%" height={8} rounded={4} style={skel.gap16} />
+      </View>
+
+      <View style={skel.headline}>
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={skel.flex1}>
+            <SkeletonBar theme={theme} width={52} height={26} rounded={radius.xs} />
+            <SkeletonBar theme={theme} width={62} height={10} style={skel.gap6} />
+          </View>
+        ))}
+      </View>
+
+      <View style={[skel.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+        {[0, 1, 2, 3].map((i) => (
+          <View key={i} style={[skel.formRow, { borderColor: theme.border }]}>
+            <SkeletonBar theme={theme} width={i % 2 ? 96 : 132} height={13} />
+            <SkeletonBar theme={theme} width={44} height={13} />
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const skel = StyleSheet.create({
+  flex1: { flex: 1, minWidth: 0 },
+  gap6: { marginTop: 6 },
+  gap8: { marginTop: 8 },
+  gap10: { marginTop: 10 },
+  gap16: { marginTop: 16 },
+
+  tile: {
+    flex: 1,
+    flexDirection: "row",
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+  },
+  spine: { width: 4, alignSelf: "stretch" },
+  gap4: { marginTop: 4 },
+  // Mirrors PracticeTile's `inner`: one row, body left, numeral right.
+  tileInner: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    padding: spacing.md + 2,
+  },
+  barRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm },
+  numberCol: { alignItems: "flex-end", minWidth: 44 },
+
+  topicRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  rule: { width: 3, alignSelf: "stretch", borderRadius: 2 },
+
+  card: {
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+    marginTop: spacing.md,
+  },
+  formRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    padding: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+
+  question: { gap: 0 },
+  chips: { flexDirection: "row", gap: 8, marginTop: spacing.xl, marginBottom: 18 },
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    marginBottom: 6,
+  },
+
+  hero: { alignItems: "center", paddingVertical: spacing.xxl },
+  headline: { flexDirection: "row", gap: spacing.md, marginTop: spacing.lg },
+});
 
 /** Ceiling on the question pool pulled down to sample from. */
 const FETCH_CAP = 500;
@@ -357,7 +572,6 @@ export default function Practice() {
   const [shuffleQuestions, setShuffleQuestions] = useState(true);
 
   const [loading, setLoading] = useState(true);
-  const [loadingText, setLoadingText] = useState("Preparing Practice Mode...");
   // Boolean rather than a raw offset, so the header animates once at a
   // threshold instead of re-rendering this screen every frame.
   const insets = useSafeAreaInsets();
@@ -387,6 +601,8 @@ export default function Practice() {
    * distinguishes the two rather than claiming an empty topic mid-load.
    */
   const [availableCount, setAvailableCount] = useState<number | null>(null);
+  /** The head count is in flight. Separate from a null count, which also means "unknown". */
+  const [counting, setCounting] = useState(false);
   const [practiceAlert, setPracticeAlert] = useState<PracticeAlertState>({
     visible: false,
     type: "info",
@@ -551,7 +767,6 @@ export default function Practice() {
 
   async function loadCourses() {
     setLoading(true);
-    setLoadingText("Preparing practice mode...");
 
     const user = await sessionUser();
 
@@ -726,7 +941,6 @@ export default function Practice() {
     setSessionTopicIds(null);
     setScreen("topics");
     setLoading(true);
-    setLoadingText("Loading topics...");
     if (!isUuid(course.id)) {
       setTopics(fallbackTopics);
       setLoading(false);
@@ -773,9 +987,11 @@ export default function Practice() {
    */
   async function countAvailable(topicIds: string[]) {
     setAvailableCount(null);
+    setCounting(true);
 
     if (!selectedCourse || !isUuid(selectedCourse.id) || topicIds.length === 0) {
       setAvailableCount(0);
+      setCounting(false);
       return;
     }
 
@@ -789,10 +1005,12 @@ export default function Practice() {
     // controls without a figure rather than announcing there is nothing here.
     if (error) {
       console.log("QUESTION COUNT ERROR:", error.message);
+      setCounting(false);
       return;
     }
 
     setAvailableCount(count ?? 0);
+    setCounting(false);
   }
 
   /**
@@ -863,7 +1081,6 @@ export default function Practice() {
     const duration = getDurationSeconds();
 
     setLoading(true);
-    setLoadingText("Fetching real dashboard questions...");
     setAnswers({});
     setFlagged({});
     setSaved({});
@@ -1000,7 +1217,6 @@ export default function Practice() {
 
   async function finishPractice() {
     setLoading(true);
-    setLoadingText("Analyzing performance...");
     setTimeout(async () => {
       await updateProgress();
       await savePracticeAttempt();
@@ -1310,7 +1526,6 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
 
   function retryWrongQuestions() {
     setScreen("loadingRetry");
-    setLoadingText("Preparing wrong-question retry...");
     setTimeout(() => {
       const wrongQuestions = questions.filter((q) => answers[q.id] !== q.correct_answer.toUpperCase());
       if (wrongQuestions.length === 0) {
@@ -1388,14 +1603,53 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
 
   const currentQuestion = questions[currentIndex];
 
-  if (loading || screen === "loadingRetry") {
+  /**
+   * The two loading states that belong to the engine itself.
+   *
+   * There used to be ONE gate here, above every screen branch, so the course
+   * list, the topic list, the question fetch, scoring and every retry all
+   * showed the same centred disc in a bordered card. Each screen below now
+   * owns its own, shaped like what is arriving.
+   *
+   * Which skeleton depends on where the flow is GOING, not where it is:
+   *  - confirm + loading, and loadingRetry, are both a question set being
+   *    assembled, so they wear the question screen, chrome included.
+   *  - engine + loading is finishPractice scoring the session, so it wears
+   *    the result screen. The engine branch would otherwise keep rendering a
+   *    live question, timer and all, through two awaits.
+   */
+  if (screen === "loadingRetry" || (loading && screen === "confirm")) {
     return (
-      <View style={[styles.screen, { backgroundColor: engineBg }]}>
-        <View style={[styles.loadingCard, { backgroundColor: panelBg, borderColor: theme.border }]}>
-          <ActivityIndicator size="large" color={selectedTheme.color} />
-          <Text style={[styles.loadingTitle, { color: theme.text }]}>{loadingText}</Text>
-          <Text style={[styles.loadingSub, { color: theme.muted }]}>Setting up a clean practice engine for you.</Text>
+      <View style={[styles.engineScreen, { backgroundColor: engineBg }]}>
+        <View style={[styles.engineHead, { paddingTop: insets.top + 10, borderBottomColor: theme.border }]}>
+          <View style={styles.engineHeadRow}>
+            <SkeletonBar theme={theme} width={36} height={36} rounded={18} />
+            <View style={styles.flex1}>
+              <SkeletonBar theme={theme} width={68} height={15} />
+              <SkeletonBar theme={theme} width={132} height={11} style={skel.gap6} />
+            </View>
+            <SkeletonBar theme={theme} width={78} height={30} rounded={radius.pill} />
+          </View>
+          <View style={styles.engineToolRow}>
+            <SkeletonBar theme={theme} width={36} height={36} rounded={18} />
+            <SkeletonBar theme={theme} width={36} height={36} rounded={18} />
+            <SkeletonBar theme={theme} width={36} height={36} rounded={18} />
+          </View>
         </View>
+        <View style={[styles.progressTrack, { backgroundColor: theme.soft }]} />
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: spacing.lg }, contentInset]} scrollEnabled={false}>
+          <PracticeQuestionSkeleton theme={theme} />
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (loading && screen === "engine") {
+    return (
+      <View style={[styles.screen, { backgroundColor: theme.bg }]}>
+        <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]} scrollEnabled={false}>
+          <PracticeResultSkeleton theme={theme} />
+        </ScrollView>
       </View>
     );
   }
@@ -1403,6 +1657,7 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
   if (screen === "courses") {
     return (
       <CoursesScreen
+        loading={loading}
         theme={theme}
         practiceHistory={practiceHistory}
         isDark={isDark}
@@ -1466,7 +1721,9 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             {selectedCourse?.title || "Topics"}
           </Text>
 
-          {topics.length === 0 ? (
+          {loading ? (
+            <PracticeTopicSkeleton theme={theme} />
+          ) : topics.length === 0 ? (
             <EmptyState
               theme={theme}
               icon="bullseye-arrow"
@@ -1596,7 +1853,9 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             </View>
           </View>
 
-          {availableCount === 0 ? (
+          {counting ? (
+            <PracticeFormSkeleton theme={theme} rows={3} />
+          ) : availableCount === 0 ? (
             // Said BEFORE anything is configured. Two hundred of the project's
             // two hundred and one topics are in this state, and the old screen
             // only admitted it after four controls had been set and Start
@@ -1832,16 +2091,56 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
     }%`;
     return (
       <View style={[styles.engineScreen, { backgroundColor: engineBg }]}>
-        <View style={[styles.engineTopBar, { borderBottomColor: theme.border }]}>
-          <TouchableOpacity onPress={() => setScreen("setup")} style={styles.circleBtn}><MaterialCommunityIcons name="arrow-left" size={24} color={theme.text} /></TouchableOpacity>
-          <View style={{ flex: 1 }}><Text style={[styles.engineCourse, { color: theme.text }]}>{selectedCourse?.code}</Text><Text style={[styles.engineTopic, { color: theme.muted }]} numberOfLines={1}>{selectedTopic?.title}</Text></View>
-          <View style={[styles.timerPill, { backgroundColor: `${selectedTheme.color}16`, borderColor: selectedTheme.color }]}><MaterialCommunityIcons name="timer-sand" size={17} color={selectedTheme.color} /><Text style={[styles.timerText, { color: selectedTheme.color }]}>{formatTime(secondsLeft)}</Text></View>
-        </View>
-        <View style={styles.engineTools}>
-          <TouchableOpacity onPress={() => toggleSave(currentQuestion.id)} style={styles.toolBtn}><MaterialCommunityIcons name={saved[currentQuestion.id] ? "bookmark-check" : "bookmark-outline"} size={24} color={saved[currentQuestion.id] ? "#EAB308" : theme.muted} /></TouchableOpacity>
-          <TouchableOpacity onPress={() => toggleFlag(currentQuestion.id)} style={styles.toolBtn}><MaterialCommunityIcons name={flagged[currentQuestion.id] ? "flag-variant" : "flag-variant-outline"} size={24} color={flagged[currentQuestion.id] ? "#EF4444" : theme.muted} /></TouchableOpacity>
-          <TouchableOpacity onPress={() => setNavigatorOpen(true)} style={styles.toolBtn}><MaterialCommunityIcons name="view-grid-plus-outline" size={24} color={theme.muted} /></TouchableOpacity>
-          <TouchableOpacity onPress={submitPractice} style={[styles.submitSmall, { backgroundColor: selectedTheme.color }]}><Text style={styles.submitSmallText}>Submit</Text></TouchableOpacity>
+          {/* ONE container, two rows. The title row and the tool row used to be
+            separate bands, each paying its own vertical padding, and together
+            they cost 167 of the 174pt of chrome above the question — 21% of a
+            390x844 screen and 26% of a 667, before a word of the stem.
+
+            paddingTop was a hardcoded 42: a status-bar allowance that never
+            read insets.top, so it burned 42pt on web where there is no status
+            bar and could still be wrong on a device. Same fault the bottom
+            bar had at the other end of the screen. */}
+        <View style={[styles.engineHead, { paddingTop: insets.top + 10, borderBottomColor: theme.border }]}>
+          <View style={styles.engineHeadRow}>
+            <TouchableOpacity onPress={() => setScreen("setup")} style={styles.circleBtn}>
+              <MaterialCommunityIcons name="arrow-left" size={24} color={theme.text} />
+            </TouchableOpacity>
+
+            <View style={styles.flex1}>
+              <Text style={[styles.engineCourse, { color: theme.text }]}>{selectedCourse?.code}</Text>
+              <Text style={[styles.engineTopic, { color: theme.muted }]} numberOfLines={1}>
+                {selectedTopic?.title}
+              </Text>
+            </View>
+
+            <View style={[styles.timerPill, { backgroundColor: `${selectedTheme.color}16`, borderColor: selectedTheme.color }]}>
+              <MaterialCommunityIcons name="timer-sand" size={17} color={selectedTheme.color} />
+              <Text style={[styles.timerText, { color: selectedTheme.color }]}>{formatTime(secondsLeft)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.engineToolRow}>
+            <TouchableOpacity onPress={() => toggleSave(currentQuestion.id)} style={styles.toolBtn}>
+              <MaterialCommunityIcons
+                name={saved[currentQuestion.id] ? "bookmark-check" : "bookmark-outline"}
+                size={22}
+                color={saved[currentQuestion.id] ? "#EAB308" : theme.muted}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => toggleFlag(currentQuestion.id)} style={styles.toolBtn}>
+              <MaterialCommunityIcons
+                name={flagged[currentQuestion.id] ? "flag-variant" : "flag-variant-outline"}
+                size={22}
+                color={flagged[currentQuestion.id] ? "#EF4444" : theme.muted}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setNavigatorOpen(true)} style={styles.toolBtn}>
+              <MaterialCommunityIcons name="view-grid-plus-outline" size={22} color={theme.muted} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={submitPractice} style={[styles.submitSmall, { backgroundColor: selectedTheme.color }]}>
+              <Text style={styles.submitSmallText}>Submit</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={[styles.progressTrack, { backgroundColor: theme.soft }]}>
           <View
@@ -1914,10 +2213,15 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
                     accessibilityState={{ selected }}
                     style={[
                       styles.optionRow,
-                      { borderBottomColor: theme.border },
+                      // A resting row gets a faint ground so it reads as a
+                      // target before anything has been picked. With only a
+                      // hairline between them the unpicked options looked
+                      // inert — the selected state was never the problem.
+                      // Grey, not a hue: colour on this screen means "your
+                      // answer", and four tinted rows would say nothing.
                       selected
                         ? { backgroundColor: withAlpha(selectedTheme.color, isDark ? 0.16 : 0.09) }
-                        : null,
+                        : { backgroundColor: withAlpha(theme.text, isDark ? 0.05 : 0.035) },
                     ]}
                   >
                     <View
@@ -2210,6 +2514,7 @@ function CoursesScreen({
   isDark,
   insets,
   courses,
+  loading,
   practiceHistory,
   savedSession,
   onResume,
@@ -2220,6 +2525,8 @@ function CoursesScreen({
   isDark: boolean;
   insets: { top: number };
   courses: Course[];
+  /** The course query is in flight; the list has not resolved to empty yet. */
+  loading: boolean;
   /** Null until the history query lands. */
   practiceHistory: PracticeHistory | null;
   savedSession: any;
@@ -2330,7 +2637,9 @@ function CoursesScreen({
             </Card>
           )}
 
-          {courses.length === 0 ? (
+          {loading ? (
+            <PracticeCourseSkeleton theme={theme} />
+          ) : courses.length === 0 ? (
             <EmptyState
               theme={theme}
               icon="book-search-outline"
@@ -2482,9 +2791,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 150,
   },
-  loadingCard: { margin: 24, marginTop: 180, borderWidth: 1, borderRadius: 30, padding: 30, alignItems: "center" },
-  loadingTitle: { fontSize: 22, fontWeight: "900", marginTop: 18, textAlign: "center" },
-  loadingSub: { fontSize: 14, textAlign: "center", marginTop: 8, lineHeight: 21 },
   backBtn: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 22, alignSelf: "flex-start" },
   backIconWrap: { width: 38, height: 38, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   backText: { fontWeight: "900", fontSize: 14 },
@@ -2588,33 +2894,40 @@ const styles = StyleSheet.create({
   confirmRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14 },
   confirmLabel: { fontSize: 13, fontWeight: "800" },
   confirmValue: { flex: 1, textAlign: "right", fontSize: 14, fontWeight: "900" },
-  confidenceRow: { flexDirection: "row", gap: 8, marginBottom: 18 },
+  confidenceRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
   confidenceChip: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   confidenceText: { fontSize: 11, fontWeight: "800" },
   navigatorStats: { flexDirection: "row", gap: 10, marginBottom: 16 },
   navigatorStat: { flex: 1, borderRadius: 16, padding: 12 },
   navigatorStatValue: { fontSize: 18, fontWeight: "900" },
   navigatorStatLabel: { fontSize: 10, fontWeight: "800", marginTop: 2 },
-  engineTopBar: { paddingTop: 42, paddingHorizontal: 18, paddingBottom: 14, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 12 },
+  // One header, two rows, one set of vertical paddings. paddingTop comes from
+  // the safe-area inset at the call site.
+  engineHead: { paddingHorizontal: 18, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 6 },
+  engineHeadRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  engineToolRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   circleBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   engineCourse: { fontSize: 17, fontWeight: "900" },
   engineTopic: { fontSize: 12, marginTop: 2 },
   timerPill: { borderWidth: 1, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 6 },
   timerText: { fontSize: 12, fontWeight: "900" },
-  engineTools: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 12 },
-  toolBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  submitSmall: { marginLeft: "auto", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999 },
+
+  toolBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  submitSmall: { marginLeft: "auto", paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999 },
   submitSmallText: { color: "#FFFFFF", fontWeight: "900", fontSize: 12 },
-  progressTrack: { height: 7, borderRadius: 999, overflow: "hidden", marginHorizontal: 20 },
+  progressTrack: { height: 6, borderRadius: 999, overflow: "hidden", marginHorizontal: 20, marginTop: spacing.sm },
   progressFill: { height: "100%", borderRadius: 999 },
-  engineScroll: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 230 },
+  // paddingBottom is always overridden at the call site with engineReserve,
+  // derived from the bar height and the safe area. A literal here was a second
+  // number claiming to be the same thing.
+  engineScroll: { paddingHorizontal: 20, paddingTop: spacing.lg },
   questionHeader: { flexDirection: "row", alignItems: "baseline", marginBottom: 18, gap: 6 },
   questionCounter: { fontSize: 18, fontWeight: "900" },
   questionTotal: { fontSize: 13, fontWeight: "800" },
   // Title weight, not black. At 900 a long stem is eight lines of heavy bold
   // and reads as a wall; this stays clearly heavier than the options without
   // shouting the whole paragraph.
-  questionText: { ...typeScale.title, fontSize: 22, lineHeight: 30, marginBottom: spacing.xl },
+  questionText: { ...typeScale.title, fontSize: 22, lineHeight: 30, marginBottom: spacing.lg },
   optionRow: {
     flexDirection: "row",
     // flex-start, not center: a three-line option should not push its letter
@@ -2624,7 +2937,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md + 2,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    // A gap, not a hairline. Once every row carries a ground the rows already
+    // read as separate objects, and a rule between two filled surfaces is a
+    // seam rather than a separator.
+    marginBottom: 6,
   },
   optionRadio: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   radioInner: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#FFFFFF" },

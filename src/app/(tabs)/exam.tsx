@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -30,6 +29,7 @@ import { IconPlate } from "../../ui/IconPlate";
 import { useContentInset } from "../../ui/layout/breakpoints";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
+import { QuestionNavigator } from "../../ui/QuestionNavigator";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
 import { getGrade, HeadlineRow, HeadlineStat, ScoreHero } from "../../ui/Score";
 import { copyToClipboard, dataUrlToBlob, safeFileName, shareOrDownloadBlob, waitForFonts } from "../../ui/share-file";
@@ -1353,17 +1353,19 @@ https://lasuscholar.com`;
           )}
         </View>
 
-        <ExamNavigator
+        <QuestionNavigator
           open={navigatorOpen}
-          setOpen={setNavigatorOpen}
-          questions={questions}
-          answers={answers}
-          flagged={flagged}
+          onClose={() => setNavigatorOpen(false)}
+          marks={questions.map((q) => ({
+            id: q.id,
+            answered: Boolean(answers[q.id]),
+            flagged: Boolean(flagged[q.id]),
+          }))}
           currentIndex={currentIndex}
-          goToQuestion={goToQuestion}
+          onJump={goToQuestion}
           theme={theme}
-          paper={paper}
-          accent={accent}
+          panelBg={paper}
+          color={accent}
         />
 
         <ExamPrompt
@@ -1649,123 +1651,6 @@ function BreakdownTable({ title, rows, theme }: any) {
           </View>
         );
       })}
-    </View>
-  );
-}
-
-function ExamNavigator({
-  open,
-  setOpen,
-  questions,
-  answers,
-  flagged,
-  currentIndex,
-  goToQuestion,
-  theme,
-  paper,
-  accent,
-}: any) {
-  return (
-    <Modal visible={open} transparent animationType="slide">
-      <View style={styles.modalOverlay}>
-        <TouchableOpacity
-          style={styles.modalCloseArea}
-          onPress={() => setOpen(false)}
-        />
-
-        <View
-          style={[
-            styles.navigatorSheet,
-            { backgroundColor: paper, borderColor: theme.border },
-          ]}
-        >
-          <View style={styles.sheetHandle} />
-
-          <View style={styles.navigatorHeader}>
-            <Text style={[styles.navigatorTitle, { color: theme.text }]}>
-              Question Palette
-            </Text>
-            <TouchableOpacity onPress={() => setOpen(false)}>
-              <MaterialCommunityIcons
-                name="close"
-                size={25}
-                color={theme.text}
-              />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.paletteStats}>
-            <PaletteStat
-              label="Answered"
-              value={questions.filter((q: Question) => !!answers[q.id]).length}
-              color="#22C55E"
-              theme={theme}
-            />
-            <PaletteStat
-              label="Flagged"
-              value={questions.filter((q: Question) => !!flagged[q.id]).length}
-              color="#F97316"
-              theme={theme}
-            />
-            <PaletteStat
-              label="Blank"
-              value={questions.filter((q: Question) => !answers[q.id]).length}
-              color="#94A3B8"
-              theme={theme}
-            />
-          </View>
-
-          <ScrollView
-            style={styles.paletteGridScroll}
-            contentContainerStyle={styles.paletteGrid}
-            showsVerticalScrollIndicator={false}
-          >
-            {questions.map((q: Question, index: number) => {
-              const isCurrent = index === currentIndex;
-              const isAnswered = !!answers[q.id];
-              const isFlagged = !!flagged[q.id];
-              const fill = isCurrent
-                ? accent
-                : isFlagged
-                  ? "#F97316"
-                  : isAnswered
-                    ? "#22C55E"
-                    : theme.soft;
-              const color =
-                isCurrent || isFlagged || isAnswered ? "#FFFFFF" : theme.text;
-
-              return (
-                <TouchableOpacity
-                  key={q.id}
-                  onPress={() => goToQuestion(index)}
-                  style={[
-                    styles.paletteItem,
-                    { backgroundColor: fill, borderColor: theme.border },
-                  ]}
-                >
-                  <Text style={[styles.paletteItemText, { color }]}>
-                    {index + 1}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function PaletteStat({ label, value, color, theme }: any) {
-  return (
-    <View style={[styles.paletteStat, { backgroundColor: theme.soft }]}>
-      <View style={[styles.paletteStatDot, { backgroundColor: color }]} />
-      <Text style={[styles.paletteStatValue, { color: theme.text }]}>
-        {value}
-      </Text>
-      <Text style={[styles.paletteStatLabel, { color: theme.muted }]}>
-        {label}
-      </Text>
     </View>
   );
 }
@@ -2635,96 +2520,18 @@ const styles = StyleSheet.create({
 
 
 
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "#00000099",
-    justifyContent: "flex-end",
-  },
 
-  modalCloseArea: {
-    flex: 1,
-  },
 
-  navigatorSheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 34,
-  },
 
-  sheetHandle: {
-    width: 50,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: "#94A3B8",
-    alignSelf: "center",
-    marginBottom: 18,
-  },
 
-  navigatorHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
 
-  navigatorTitle: {
-    fontSize: 21,
-    fontWeight: "900",
-  },
 
-  paletteStats: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 18,
-  },
 
-  paletteStat: {
-    flex: 1,
-    borderRadius: 14,
-    padding: 12,
-  },
 
-  paletteStatDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginBottom: 8,
-  },
 
-  paletteStatValue: {
-    fontSize: 20,
-    fontWeight: "900",
-  },
 
-  paletteStatLabel: {
-    fontSize: 11,
-    fontWeight: "800",
-  },
 
-  paletteGridScroll: {
-    maxHeight: 330,
-  },
 
-  paletteGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    paddingBottom: 8,
-  },
 
-  paletteItem: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
 
-  paletteItemText: {
-    fontWeight: "900",
-  },
 });

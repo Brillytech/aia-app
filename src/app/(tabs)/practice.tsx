@@ -6,7 +6,6 @@ import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -37,6 +36,7 @@ import { IconPlate } from "../../ui/IconPlate";
 import { useContentInset, useIsDesktop } from "../../ui/layout/breakpoints";
 import { dividerInset, ListRow, ListSection } from "../../ui/List";
 import { PracticeTile, practiceTileLayout } from "../../ui/PracticeTile";
+import { QuestionNavigator } from "../../ui/QuestionNavigator";
 import { formatShareDate, ResultShareCard } from "../../ui/ResultShareCard";
 import { buildReviewOptions, ReviewPager } from "../../ui/ReviewPager";
 import { Segmented } from "../../ui/Segmented";
@@ -2260,7 +2260,20 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
           {currentIndex === questions.length - 1 ? <TouchableOpacity onPress={submitPractice} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Submit</Text></TouchableOpacity> : <TouchableOpacity onPress={nextQuestion} style={[styles.nextBtn, { backgroundColor: selectedTheme.color }]}><Text style={styles.nextText}>Next</Text><MaterialCommunityIcons name="chevron-right" size={22} color="#FFFFFF" /></TouchableOpacity>}
         </View>
           </View>
-        <QuestionNavigator open={navigatorOpen} setOpen={setNavigatorOpen} questions={questions} answers={answers} flagged={flagged} confidence={confidence} currentIndex={currentIndex} goToQuestion={goToQuestion} theme={theme} panelBg={panelBg} color={selectedTheme.color} />
+        <QuestionNavigator
+          open={navigatorOpen}
+          onClose={() => setNavigatorOpen(false)}
+          marks={questions.map((q) => ({
+            id: q.id,
+            answered: Boolean(answers[q.id]),
+            flagged: Boolean(flagged[q.id]),
+          }))}
+          currentIndex={currentIndex}
+          onJump={goToQuestion}
+          theme={theme}
+          panelBg={panelBg}
+          color={selectedTheme.color}
+        />
         {renderPracticeAlert()}
       </View>
     );
@@ -2478,27 +2491,6 @@ function Metric({ label, value, color, theme }: any) {
 
 function ActionRow({ icon, color, title, subtitle, onPress, theme }: any) {
   return <TouchableOpacity onPress={onPress} style={[styles.actionRow, { backgroundColor: theme.card, borderColor: theme.border }]}><View style={[styles.actionIcon, { backgroundColor: `${color}20` }]}><MaterialCommunityIcons name={icon} size={22} color={color} /></View><View style={{ flex: 1 }}><Text style={[styles.actionTitle, { color: theme.text }]}>{title}</Text><Text style={[styles.actionSub, { color: theme.muted }]}>{subtitle}</Text></View><MaterialCommunityIcons name="chevron-right" size={24} color={theme.muted} /></TouchableOpacity>;
-}
-
-function QuestionNavigator({ open, setOpen, questions, answers, flagged, confidence, currentIndex, goToQuestion, theme, panelBg, color }: any) {
-  return <Modal visible={open} transparent animationType="slide"><View style={styles.modalOverlay}><TouchableOpacity style={styles.modalCloseArea} onPress={() => setOpen(false)} /><View style={[styles.navigatorSheet, { backgroundColor: panelBg, borderColor: theme.border }]}><View style={styles.sheetHandle} /><View style={styles.navigatorHeader}><Text style={[styles.navigatorTitle, { color: theme.text }]}>Question Navigator</Text><TouchableOpacity onPress={() => setOpen(false)}><MaterialCommunityIcons name="close" size={25} color={theme.text} /></TouchableOpacity></View><View style={styles.navigatorStats}>
-            <NavigatorStat label="Answered" value={questions.filter((q: Question) => answers[q.id]).length} color="#22C55E" theme={theme} />
-            <NavigatorStat label="Flagged" value={questions.filter((q: Question) => flagged[q.id]).length} color="#F97316" theme={theme} />
-            <NavigatorStat label="Confidence" value={questions.filter((q: Question) => confidence?.[q.id]).length} color="#8B5CF6" theme={theme} />
-          </View><View style={styles.legendRow}><Legend color="#22C55E" label="Answered" theme={theme} /><Legend color="#F97316" label="Flagged" theme={theme} /><Legend color={theme.muted} label="Unanswered" theme={theme} /></View><ScrollView style={styles.navigatorGridScroll} contentContainerStyle={styles.navigatorGrid} showsVerticalScrollIndicator={false}>{questions.map((q: Question, index: number) => { const answered = !!answers[q.id]; const isFlagged = !!flagged[q.id]; const active = currentIndex === index; const bg = active ? color : answered ? "#22C55E" : isFlagged ? "#F97316" : theme.soft; const textColor = active || answered || isFlagged ? "#FFFFFF" : theme.text; return <TouchableOpacity key={q.id} onPress={() => goToQuestion(index)} style={[styles.questionDot, { backgroundColor: bg, borderColor: active ? color : theme.border }]}><Text style={[styles.questionDotText, { color: textColor }]}>{index + 1}</Text></TouchableOpacity>; })}</ScrollView></View></View></Modal>;
-}
-
-function NavigatorStat({ label, value, color, theme }: any) {
-  return (
-    <View style={[styles.navigatorStat, { backgroundColor: theme.soft }]}>
-      <Text style={[styles.navigatorStatValue, { color }]}>{value}</Text>
-      <Text style={[styles.navigatorStatLabel, { color: theme.muted }]}>{label}</Text>
-    </View>
-  );
-}
-
-function Legend({ color, label, theme }: any) {
-  return <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: color }]} /><Text style={[styles.legendText, { color: theme.muted }]}>{label}</Text></View>;
 }
 
 
@@ -2897,10 +2889,6 @@ const styles = StyleSheet.create({
   confidenceRow: { flexDirection: "row", gap: 8, marginBottom: spacing.md },
   confidenceChip: { paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   confidenceText: { fontSize: 11, fontWeight: "800" },
-  navigatorStats: { flexDirection: "row", gap: 10, marginBottom: 16 },
-  navigatorStat: { flex: 1, borderRadius: 16, padding: 12 },
-  navigatorStatValue: { fontSize: 18, fontWeight: "900" },
-  navigatorStatLabel: { fontSize: 10, fontWeight: "800", marginTop: 2 },
   // One header, two rows, one set of vertical paddings. paddingTop comes from
   // the safe-area inset at the call site.
   engineHead: { paddingHorizontal: 18, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 6 },
@@ -2999,21 +2987,7 @@ const styles = StyleSheet.create({
   // Parked offscreen purely so ViewShot has something laid out to capture.
   // Sized by its content now — the card owns its own fixed width.
   hiddenShareWrap: { position: "absolute", left: -9999, top: 0 },
-  navigatorGridScroll: { maxHeight: 330 },
   emptyCard: { borderWidth: 1, borderRadius: 30, padding: 26, alignItems: "center", justifyContent: "center", minHeight: 210 },
   emptyTitle: { marginTop: 14, fontSize: 18, fontWeight: "900", textAlign: "center" },
   emptyText: { marginTop: 7, fontSize: 13, lineHeight: 20, fontWeight: "700", textAlign: "center" },
-  modalOverlay: { flex: 1, backgroundColor: "#00000099", justifyContent: "flex-end" },
-  modalCloseArea: { flex: 1 },
-  navigatorSheet: { borderTopLeftRadius: 30, borderTopRightRadius: 30, borderWidth: 1, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 34 },
-  sheetHandle: { width: 50, height: 5, borderRadius: 999, backgroundColor: "#94A3B8", alignSelf: "center", marginBottom: 18 },
-  navigatorHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
-  navigatorTitle: { fontSize: 21, fontWeight: "900" },
-  legendRow: { flexDirection: "row", gap: 14, marginBottom: 18 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  legendDot: { width: 9, height: 9, borderRadius: 5 },
-  legendText: { fontSize: 12, fontWeight: "800" },
-  navigatorGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  questionDot: { width: 44, height: 44, borderRadius: 16, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  questionDotText: { fontWeight: "900" },
 });

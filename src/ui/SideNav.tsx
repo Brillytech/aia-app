@@ -80,6 +80,16 @@ function Row({
         focused ? { backgroundColor: theme.accentSoft } : null,
       ]}
     >
+      {/* A bar at the rail's edge, not a second colour on the pill. It is
+          what makes the current page findable from the corner of the eye
+          without the row having to shout. */}
+      <View
+        style={[
+          styles.marker,
+          focused ? { backgroundColor: theme.accent } : null,
+        ]}
+      />
+
       <MaterialCommunityIcons
         name={icon}
         size={ICON}
@@ -88,8 +98,9 @@ function Row({
       <Text
         style={[
           styles.rowLabel,
-          { color: focused ? theme.accent : theme.text },
-          focused ? { fontWeight: weight.black } : null,
+          focused
+            ? { color: theme.accent, fontWeight: weight.bold }
+            : { color: theme.muted2, fontWeight: weight.semi },
         ]}
         numberOfLines={1}
       >
@@ -118,12 +129,20 @@ export function SideNav({
     <View
       style={[
         styles.rail,
-        { backgroundColor: theme.navBg, borderRightColor: theme.border },
+        // The card surface, not navBg. navBg is a translucent wash made for
+        // the phone's floating pill, and in light mode it is within one per
+        // cent of the page behind it — so on a desktop the rail was a
+        // hairline with some text beside it rather than a panel.
+        { backgroundColor: theme.card, borderRightColor: theme.border },
       ]}
     >
       <View style={styles.brand}>
         <Wordmark theme={theme} compact />
       </View>
+
+      <View style={[styles.divider, { backgroundColor: theme.border }]} />
+
+      <Text style={[styles.groupLabel, { color: theme.muted2 }]}>MENU</Text>
 
       <View style={styles.group}>
         {routes.map((route) => {
@@ -175,6 +194,8 @@ export function SideNav({
 
       <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
+      <Text style={[styles.groupLabel, { color: theme.muted2 }]}>ACCOUNT</Text>
+
       <View style={styles.group}>
         {ACCOUNT_ROWS.map((row) => (
           <Row
@@ -199,32 +220,49 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRightWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xl,
+    paddingVertical: spacing.lg,
   },
   brand: {
     paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
+  // Sets the two halves of the rail apart without a rule between every item.
+  groupLabel: {
+    ...type.kicker,
+    letterSpacing: 1.2,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   group: {
-    gap: spacing.xxs,
+    gap: 2,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
-    height: 44,
-    paddingHorizontal: spacing.md,
+    height: 46,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.md,
     borderRadius: radius.sm,
+  },
+  marker: {
+    position: "absolute",
+    left: 0,
+    top: 13,
+    bottom: 13,
+    width: 3,
+    borderRadius: 2,
   },
   rowLabel: {
     ...type.body,
+    letterSpacing: 0,
   },
   spacer: {
     flex: 1,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    marginVertical: spacing.md,
+    marginVertical: spacing.lg,
     marginHorizontal: spacing.sm,
   },
 });

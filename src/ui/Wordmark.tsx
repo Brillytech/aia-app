@@ -57,15 +57,15 @@ export function Wordmark({
         <Image
           source={logo}
           resizeMode="cover"
-          style={[
-            styles.logo,
-            {
-              width: size,
-              height: size,
-              borderRadius: compact ? radius.xs : radius.sm,
-              borderColor: theme.border,
-            },
-          ]}
+          // No frame. The mark is already a filled rounded square with its own
+          // edge; a hairline around it drew a second, slightly different
+          // corner radius just outside the first, which is what made the logo
+          // look boxed rather than placed.
+          style={{
+            width: size,
+            height: size,
+            borderRadius: compact ? radius.xs : radius.sm,
+          }}
         />
       ) : null}
 
@@ -94,9 +94,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     alignSelf: "flex-start",
     gap: spacing.sm,
-  },
-  logo: {
-    borderWidth: StyleSheet.hairlineWidth,
   },
   name: {
     ...type.section,

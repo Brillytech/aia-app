@@ -18,6 +18,19 @@
       content="Study materials, past questions, CBT practice and exam prep for LASU students."
     />
 
+    <!-- The app typeface. On web one family holds every weight and CSS
+         picks between them, so this link is the whole mechanism; native
+         registers each weight separately via @expo-google-fonts/figtree.
+         preconnect because the stylesheet is render-blocking and the font
+         host is a second origin. display=swap so first paint is never held
+         on the network. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700;800;900&display=swap"
+    />
+
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
     <!-- First paint only. These answer the OS; the app's theme is its own

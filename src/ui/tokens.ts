@@ -1,3 +1,4 @@
+import { fontFor } from "./fonts";
 import { Platform } from "react-native";
 import type { TextStyle } from "react-native";
 
@@ -47,17 +48,17 @@ export const weight = {
 // Assign a step directly (`title: type.title`) when a style is exactly the step;
 // spread it (`{ ...type.micro, marginTop: 2 }`) only when adding properties.
 export const type = {
-  micro: { fontSize: 10, lineHeight: 14, fontWeight: weight.bold, letterSpacing: 0.4 },
-  kicker: { fontSize: 10, lineHeight: 14, fontWeight: weight.black, letterSpacing: 1 },
-  caption: { fontSize: 12, lineHeight: 16, fontWeight: weight.bold, letterSpacing: 0.2 },
-  body: { fontSize: 14, lineHeight: 20, fontWeight: weight.semi, letterSpacing: 0 },
-  bodyStrong: { fontSize: 14, lineHeight: 20, fontWeight: weight.black, letterSpacing: 0 },
-  bodyLg: { fontSize: 16, lineHeight: 22, fontWeight: weight.semi, letterSpacing: 0 },
-  section: { fontSize: 18, lineHeight: 24, fontWeight: weight.black, letterSpacing: -0.2 },
-  title: { fontSize: 22, lineHeight: 28, fontWeight: weight.black, letterSpacing: -0.4 },
-  display: { fontSize: 28, lineHeight: 34, fontWeight: weight.black, letterSpacing: -0.6 },
-  hero: { fontSize: 34, lineHeight: 40, fontWeight: weight.black, letterSpacing: -0.8 },
-  mega: { fontSize: 64, lineHeight: 68, fontWeight: weight.black, letterSpacing: -1.6 },
+  micro: { fontSize: 10, lineHeight: 14, fontWeight: weight.bold, fontFamily: fontFor(weight.bold), letterSpacing: 0.4 },
+  kicker: { fontSize: 10, lineHeight: 14, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: 1 },
+  caption: { fontSize: 12, lineHeight: 16, fontWeight: weight.bold, fontFamily: fontFor(weight.bold), letterSpacing: 0.2 },
+  body: { fontSize: 14, lineHeight: 20, fontWeight: weight.semi, fontFamily: fontFor(weight.semi), letterSpacing: 0 },
+  bodyStrong: { fontSize: 14, lineHeight: 20, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: 0 },
+  bodyLg: { fontSize: 16, lineHeight: 22, fontWeight: weight.semi, fontFamily: fontFor(weight.semi), letterSpacing: 0 },
+  section: { fontSize: 18, lineHeight: 24, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: -0.2 },
+  title: { fontSize: 22, lineHeight: 28, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: -0.4 },
+  display: { fontSize: 28, lineHeight: 34, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: -0.6 },
+  hero: { fontSize: 34, lineHeight: 40, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: -0.8 },
+  mega: { fontSize: 64, lineHeight: 68, fontWeight: weight.black, fontFamily: fontFor(weight.black), letterSpacing: -1.6 },
 } as const;
 
 // Elevation presets — pass shadowColor from the active theme.

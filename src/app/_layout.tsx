@@ -1,3 +1,13 @@
+import {
+  Figtree_300Light,
+  Figtree_400Regular,
+  Figtree_500Medium,
+  Figtree_600SemiBold,
+  Figtree_700Bold,
+  Figtree_800ExtraBold,
+  Figtree_900Black,
+  useFonts,
+} from "@expo-google-fonts/figtree";
 import { router, Stack, usePathname } from "expo-router";
 import { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
@@ -38,6 +48,24 @@ const COLUMN_MAX_WIDTH = 480;
  */
 export default function RootLayout() {
   const { theme } = useThemeMode();
+
+  /**
+   * The typeface, on native.
+   *
+   * Web gets its faces from the stylesheet in public/index.html, where the
+   * browser handles the loading; this is the native half. Rendering is not
+   * held on it — a screen in the system font for a frame is better than a
+   * blank one, and on web the hook resolves immediately anyway.
+   */
+  useFonts({
+    Figtree_300Light,
+    Figtree_400Regular,
+    Figtree_500Medium,
+    Figtree_600SemiBold,
+    Figtree_700Bold,
+    Figtree_800ExtraBold,
+    Figtree_900Black,
+  });
 
   // Above 1024 the column stops being the design and starts being a cage: the
   // sidebar and a two-pane screen cannot live inside 480px. The letterboxing

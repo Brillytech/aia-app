@@ -41,6 +41,14 @@ export type CourseSlice = {
   minutes: number;
 };
 
+/** A course and how many questions were answered in it this week. */
+export type CourseQuestions = {
+  id: string;
+  title: string;
+  code: string | null;
+  questions: number;
+};
+
 export type WeeklyReport = {
   /** 0 for this week, -1 for last. */
   offset: number;
@@ -58,6 +66,14 @@ export type WeeklyReport = {
   /** Busiest day of the week, or null when nothing was logged. */
   bestDay: DayBar | null;
   topCourses: CourseSlice[];
+  /**
+   * Ranked by questions, not by minutes.
+   *
+   * Deliberately a separate list from topCourses: that one is ranked by logged
+   * time and capped, so a course answered in but barely sat with would drop
+   * off it and take its questions with it.
+   */
+  questionsByCourse: CourseQuestions[];
   isEmpty: boolean;
 };
 
@@ -68,6 +84,9 @@ const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const LOOKBACK_DAYS = 120;
 const MAX_LOGS = 4000;
 const TOP_COURSES = 4;
+const TOP_QUESTION_COURSES = 5;
+/** A week of answers is tens of rows; this is a ceiling, not a target. */
+const MAX_ANSWER_ROWS = 2000;
 
 export const MODE_COLOR: Record<LearningMode, string> = {
   study: category.blue,
@@ -120,20 +139,25 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
         .gte("created_at", lookback.toISOString())
         .order("created_at", { ascending: false })
         .limit(MAX_LOGS),
+      // The course comes through the question, which is the only place it is
+      // recorded on an answer row. !inner so an answer whose question has been
+      // deleted drops out rather than arriving with a null course.
       supabase
         .from("practice_answers")
-        .select("id", { count: "exact", head: true })
+        .select("id, questions!inner(course_id)")
         .eq("user_id", userId)
         .not("selected_answer", "is", null)
         .gte("created_at", fromIso)
-        .lt("created_at", toIso),
+        .lt("created_at", toIso)
+        .limit(MAX_ANSWER_ROWS),
       supabase
         .from("exam_answers")
-        .select("id", { count: "exact", head: true })
+        .select("id, questions!inner(course_id)")
         .eq("user_id", userId)
         .not("selected_answer", "is", null)
         .gte("created_at", fromIso)
-        .lt("created_at", toIso),
+        .lt("created_at", toIso)
+        .limit(MAX_ANSWER_ROWS),
       supabase
         .from("practice_attempts")
         .select("score_percent")
@@ -234,27 +258,56 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
     cursor.setDate(cursor.getDate() - 1);
   }
 
-  // --- where the time went -------------------------------------------------
-  const courseIds = [...perCourse.entries()]
+  // --- the two course splits -----------------------------------------------
+  const perCourseQuestions = new Map<string, number>();
+  for (const rows of [practiceAnswers.data, examAnswers.data]) {
+    for (const row of rows || []) {
+      // PostgREST returns the embed as an object for a to-one relationship,
+      // but types it as an array; handle both rather than assuming.
+      const embed = (row as any).questions;
+      const courseId = Array.isArray(embed) ? embed[0]?.course_id : embed?.course_id;
+      if (courseId) perCourseQuestions.set(courseId, (perCourseQuestions.get(courseId) || 0) + 1);
+    }
+  }
+
+  const timeIds = [...perCourse.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, TOP_COURSES)
     .map(([id]) => id);
 
-  let topCourses: CourseSlice[] = [];
+  const questionIds = [...perCourseQuestions.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TOP_QUESTION_COURSES)
+    .map(([id]) => id);
 
-  if (courseIds.length) {
+  let topCourses: CourseSlice[] = [];
+  let questionsByCourse: CourseQuestions[] = [];
+
+  // One lookup for both lists, which overlap heavily.
+  const wanted = [...new Set([...timeIds, ...questionIds])];
+
+  if (wanted.length) {
     const { data: courseRows } = await supabase
       .from("courses")
       .select("id, title, code")
-      .in("id", courseIds);
+      .in("id", wanted);
 
     const byId = new Map((courseRows || []).map((c: any) => [c.id, c]));
-
-    topCourses = courseIds.map((id) => ({
-      id,
+    const name = (id: string) => ({
       title: byId.get(id)?.title || "Untitled course",
       code: byId.get(id)?.code ?? null,
+    });
+
+    topCourses = timeIds.map((id) => ({
+      id,
+      ...name(id),
       minutes: Math.round((perCourse.get(id) || 0) / 60),
+    }));
+
+    questionsByCourse = questionIds.map((id) => ({
+      id,
+      ...name(id),
+      questions: perCourseQuestions.get(id) || 0,
     }));
   }
 
@@ -263,7 +316,10 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
     .map((row: any) => Number(row.score_percent))
     .filter((n) => Number.isFinite(n));
 
-  const questionsAnswered = (practiceAnswers.count || 0) + (examAnswers.count || 0);
+  // Counted from the rows now that they are fetched, so the headline and the
+  // per-course split can never disagree.
+  const questionsAnswered =
+    (practiceAnswers.data?.length || 0) + (examAnswers.data?.length || 0);
   const xp = (xpRows.data || []).reduce((sum: number, row: any) => sum + (Number(row.xp) || 0), 0);
   const topicsCompleted = topics.count || 0;
 
@@ -289,6 +345,7 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
     sessions,
     bestDay,
     topCourses,
+    questionsByCourse,
     isEmpty: minutes === 0 && questionsAnswered === 0 && topicsCompleted === 0,
   };
 }

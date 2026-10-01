@@ -2283,26 +2283,32 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
     return (
       <View style={[styles.screen, { backgroundColor: theme.bg }]}>
         <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.md }, contentInset]} showsVerticalScrollIndicator={false}>
-          {/* The score is the whole point of this screen, so it gets the
-              screen — not a row in an eight-cell grid. The brand lockup and
-              the "lasuscholar.com" footer moved out entirely: they belong on
-              the shared image, which already draws its own. */}
+          {/* One card for the whole verdict. The score, what it is called,
+              how far along the bar it sits, what to do about it and the
+              three counts behind it are all the same fact seen from
+              different angles; spread over two unbounded blocks they read as
+              separate screens stacked on top of each other. */}
           <Animated.View
             style={[
-              styles.scoreHero,
+              styles.resultCard,
+              { backgroundColor: theme.card, borderColor: theme.border },
               { opacity: resultFade, transform: [{ translateY: resultLift }] },
             ]}
           >
-            <Text style={[styles.percentText, { color: band.color }]}>{percentage}%</Text>
-            <Text style={[styles.accuracyText, { color: theme.muted }]}>Accuracy</Text>
+            <View style={styles.resultTop}>
+              <View style={styles.flex1}>
+                <Text style={[styles.percentText, { color: band.color }]}>{percentage}%</Text>
+                <Text style={[styles.accuracyText, { color: theme.muted }]}>Accuracy</Text>
+              </View>
 
-            <View
-              style={[
-                styles.bandPill,
-                { backgroundColor: withAlpha(band.color, isDark ? 0.24 : 0.16) },
-              ]}
-            >
-              <Text style={[styles.bandText, { color: band.color }]}>{band.label}</Text>
+              <View
+                style={[
+                  styles.bandPill,
+                  { backgroundColor: withAlpha(band.color, isDark ? 0.24 : 0.16) },
+                ]}
+              >
+                <Text style={[styles.bandText, { color: band.color }]}>{band.label}</Text>
+              </View>
             </View>
 
             <View style={[styles.resultTrack, { backgroundColor: theme.soft }]}>
@@ -2315,15 +2321,17 @@ ${LASU_SCHOLAR_SHARE_LINK}`;
             </View>
 
             <Text style={[styles.bandNote, { color: theme.muted }]}>{band.note}</Text>
-          </Animated.View>
 
-          {/* Three headline numbers, unboxed. The other five are real data but
-              secondary, so they drop to a list below instead of competing. */}
-          <View style={styles.headlineRow}>
-            <HeadlineStat theme={theme} label="Correct" value={String(score)} color={theme.success} />
-            <HeadlineStat theme={theme} label="Wrong" value={String(wrong)} color={theme.error} />
-            <HeadlineStat theme={theme} label="Time" value={formatTime(timeUsed)} color={theme.info} />
-          </View>
+            <View style={[styles.resultRule, { backgroundColor: theme.border }]} />
+
+            {/* The three counts behind the percentage, inside the same card
+                rather than floating under it. */}
+            <View style={styles.headlineRow}>
+              <HeadlineStat theme={theme} label="Correct" value={String(score)} color={theme.success} />
+              <HeadlineStat theme={theme} label="Wrong" value={String(wrong)} color={theme.error} />
+              <HeadlineStat theme={theme} label="Time" value={formatTime(timeUsed)} color={theme.info} />
+            </View>
+          </Animated.View>
 
           <ListSection theme={theme} title="Breakdown" inset={dividerInset.none}>
             <ListRow theme={theme} label="Skipped" value={String(skipped)} chevron={false} />
@@ -2724,15 +2732,17 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     marginTop: spacing.xxs,
   },
-  scoreHero: {
-    alignItems: "center",
-    paddingVertical: spacing.xxxl,
+  resultCard: {
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
   },
+  resultTop: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md },
+  resultRule: { height: StyleSheet.hairlineWidth, marginVertical: spacing.lg },
   headlineRow: {
     flexDirection: "row",
     gap: spacing.md,
-    marginBottom: spacing.xxxl,
-    paddingHorizontal: spacing.xs,
   },
   headlineValue: {
     ...typeScale.title,
@@ -2959,14 +2969,14 @@ const styles = StyleSheet.create({
   reportPanel: { borderWidth: 1, borderRadius: 34, padding: 24, marginBottom: 18 },
   reportTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 },
   reportTitle: { fontSize: 24, fontWeight: "900", marginTop: 5 },
-  bandPill: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  bandText: { fontSize: 11, fontWeight: "900" },
+  bandPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, marginTop: 6 },
+  bandText: { ...typeScale.micro, letterSpacing: 0.3 },
   scoreBlock: { alignItems: "center", marginBottom: 14 },
-  percentText: { fontSize: 64, fontWeight: "900" },
-  accuracyText: { fontSize: 14, fontWeight: "800", marginTop: -4 },
-  resultTrack: { height: 10, borderRadius: 999, overflow: "hidden", marginBottom: 16 },
+  percentText: { ...typeScale.mega, fontSize: 44, lineHeight: 48 },
+  accuracyText: { ...typeScale.caption, fontWeight: weight.regular, letterSpacing: 0, marginTop: 2 },
+  resultTrack: { height: 6, borderRadius: 999, overflow: "hidden", marginTop: spacing.lg },
   resultFill: { height: "100%", borderRadius: 999 },
-  bandNote: { textAlign: "center", fontSize: 14, lineHeight: 21, marginBottom: 18 },
+  bandNote: { ...typeScale.caption, fontWeight: weight.regular, letterSpacing: 0, lineHeight: 18, marginTop: spacing.md },
   resultGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   metricCard: { width: "48%", borderRadius: 22, padding: 15 },
   metricDot: { width: 8, height: 8, borderRadius: 4, marginBottom: 10 },
@@ -2979,8 +2989,8 @@ const styles = StyleSheet.create({
   actionIcon: { width: 48, height: 48, borderRadius: 17, alignItems: "center", justifyContent: "center" },
   actionTitle: { fontSize: 16, fontWeight: "900" },
   actionSub: { fontSize: 12, marginTop: 3 },
-  resultButtons: { flexDirection: "row", gap: 12 },
-  resultButton: { flex: 1, borderRadius: 18, paddingVertical: 16, alignItems: "center" },
+  resultButtons: { flexDirection: "row", gap: spacing.md, marginTop: spacing.md },
+  resultButton: { flex: 1, borderRadius: radius.md, paddingVertical: spacing.md + 1, alignItems: "center" },
   questionLabel: { fontSize: 12, fontWeight: "900" },
   // flex:1 is load-bearing — without it the text takes its natural width and
   // pushes the trailing status icon outside the card.

@@ -35,7 +35,7 @@ import { elevation, radius, spacing, type as typeScale, weight, withAlpha } from
  * mid-question.
  */
 
-export type StudyMode = "materials" | "questions" | "cards";
+export type StudyMode = "materials" | "summary" | "questions" | "cards";
 
 export type ModeOption = {
   key: StudyMode;
@@ -574,12 +574,15 @@ const styles = StyleSheet.create({
   },
   cardStack: {
     gap: spacing.lg,
-    paddingVertical: spacing.xl,
+    paddingVertical: spacing.md + 2,
     paddingHorizontal: spacing.lg,
-    // Measured against an iPhone SE: three of these plus the head, the
-    // gaps and the tab-bar clearance leave about 70pt of page above. Any
-    // taller and the third card needs a scroller to reach.
-    minHeight: 124,
+    // Measured against an iPhone SE. At 124 with a 24pt gap, three cards
+    // plus the head and the tab-bar clearance came to 612 of 667pt and the
+    // comment above this one said a fourth would need a scroller. It would
+    // have: four at that size reach about 760. At 96 with a 14pt gap four
+    // take 440pt — within a few points of what three took — so the rule
+    // that every option is visible at once survives the fourth option.
+    minHeight: 96,
   },
   /**
    * The gap belongs to the wrapper, not the card: the lift's shadow layer
@@ -590,7 +593,7 @@ const styles = StyleSheet.create({
    * badge straddled its own top border and touched the card above.
    */
   stackItem: {
-    marginBottom: spacing.xxl,
+    marginBottom: 14,
   },
   /** Matches the flex on cardRow, which the wrapper would otherwise eat. */
   rowItem: {
@@ -626,7 +629,7 @@ const styles = StyleSheet.create({
   },
   badgeSlot: {
     position: "absolute",
-    top: -13,
+    top: -11,
     left: 0,
     right: 0,
     // Left, over the corner rather than the middle of the border. There it

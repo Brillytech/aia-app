@@ -31,6 +31,8 @@ import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
 import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
+import Markdown from "react-native-marked";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ModeBar, ModeOptions, ModeSheet, type ModeOption, type StudyMode } from "../../ui/ModeSheet";
 import { Segmented } from "../../ui/Segmented";
 import { marksFor, ratingFraction, scoreTopic, type ScoredItem, type SelfCheck } from "../../theoryScore";
@@ -62,6 +64,13 @@ type Topic = {
   id: string;
   title: string;
   description?: string | null;
+  /**
+   * The topic's summary, in Markdown.
+   *
+   * The column predates the spell when a summary belonged to a material and
+   * was never dropped, so this is the original home rather than a new one.
+   */
+  summary_1?: string | null;
 };
 type Question = {
   id: string;
@@ -160,6 +169,12 @@ const fallbackMaterials: Material[] = [
  * Below this a two-pane study view would leave the reading column narrower
  * than the list next to it, which is the wrong way round.
  */
+/**
+ * What the floating tab bar occupies at the bottom: 82pt tall, sitting 12pt
+ * off the edge. Measured on a real tab route rather than assumed.
+ */
+const TAB_BAR_BLOCK = 82;
+
 const STUDY_SPLIT = 1200;
 
 /** Course rail width once a course is open. */
@@ -254,7 +269,7 @@ function describeRow(table: string, row: any) {
  * grid systems alone are eight state atoms reading selectedCourse and
  * selectedTopic — which is a refactor, not a navigation change.
  */
-const MODES: StudyMode[] = ["materials", "questions", "cards"];
+const MODES: StudyMode[] = ["materials", "summary", "questions", "cards"];
 
 function normalizeMode(value?: string | string[]): StudyMode | null {
   const raw = String(Array.isArray(value) ? value[0] : value || "");
@@ -830,6 +845,10 @@ function getQuestionOptions(q: Question) {
 export default function Study() {
   const wide = useBreakpoint(STUDY_SPLIT);
   const contentInset = useContentInset();
+  const insets = useSafeAreaInsets();
+
+  /** Clears the tab bar, its offset and the phone's safe area, with a breath. */
+  const summaryTail = Math.max(insets.bottom, 12) + TAB_BAR_BLOCK + spacing.xxxl;
   const { theme, isDark } = useThemeMode();
   const params = useLocalSearchParams<{
     courseId?: string;
@@ -849,6 +868,17 @@ export default function Study() {
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [loadingTopics, setLoadingTopics] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
+  /**
+   * The summary screen's own load.
+   *
+   * Three states rather than a boolean and a value, so "failed" and "nothing
+   * written" can never be mistaken for each other.
+   */
+  const [summaryState, setSummaryState] = useState<{
+    status: "loading" | "ready" | "error";
+    text: string | null;
+  }>({ status: "ready", text: null });
+  const [downloadingSummary, setDownloadingSummary] = useState(false);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
   // Derived from the URL, not stored: the router is the source of truth so
@@ -900,8 +930,6 @@ export default function Study() {
 
   const [completedTopicIds, setCompletedTopicIds] = useState<Set<string>>(new Set());
   const [savingTopicId, setSavingTopicId] = useState<string | null>(null);
-  const [downloadingSummaryId, setDownloadingSummaryId] = useState<string | null>(null);
-  const [expandedSummaryId, setExpandedSummaryId] = useState<string | null>(null);
   // Drives the header collapse. A boolean rather than a raw offset so the
   // header animates once at a threshold instead of re-rendering every frame.
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
@@ -996,6 +1024,43 @@ export default function Study() {
   function closeAlert() {
     setAlert((prev) => ({ ...prev, visible: false }));
   }
+  /**
+   * The summary, fetched when the mode opens rather than taken from the topic
+   * row that is already in memory.
+   *
+   * The row would do, and would spare a round trip. It is also as old as the
+   * topic list, which a student may have been sitting on for a while, and
+   * reading a stale summary is worse than waiting 200ms for the current one.
+   * It is also the only way this screen gets an honest loading and error
+   * state: a value already in hand can neither load nor fail.
+   */
+  async function loadTopicSummary(topicId: string) {
+    if (!isUuid(topicId)) {
+      setSummaryState({ status: "ready", text: null });
+      return;
+    }
+
+    setSummaryState({ status: "loading", text: null });
+
+    const { data, error } = await supabase
+      .from("topics")
+      .select("summary_1")
+      .eq("id", topicId)
+      .maybeSingle();
+
+    if (error) {
+      console.log("TOPIC SUMMARY ERROR:", error.message);
+      // Distinct from "nothing written". Folding a failed read into an empty
+      // state is how a broken write can look like missing content for weeks.
+      setSummaryState({ status: "error", text: null });
+      return;
+    }
+
+    const raw = data?.summary_1;
+    const text = typeof raw === "string" ? raw.trim() : "";
+    setSummaryState({ status: "ready", text: text.length > 0 ? text : null });
+  }
+
   async function loadCourses() {
     setLoadingCourses(true);
 
@@ -1151,6 +1216,7 @@ export default function Study() {
   }
 
   function pickMode(next: StudyMode) {
+    if (next === "summary" && selectedTopic) loadTopicSummary(selectedTopic.id);
     setMode(next);
     setSheetOpen(false);
   }
@@ -1175,9 +1241,32 @@ export default function Study() {
    * Cards genuinely is `questions.length`: a flashcard is made from a
    * multiple-choice question, and written answers do not become cards.
    */
+  /** Trimmed non-empty. A column holding "" is not a summary. */
+  function topicSummary(): string | null {
+    const raw = selectedTopic?.summary_1;
+    const text = typeof raw === "string" ? raw.trim() : "";
+
+    return text.length > 0 ? text : null;
+  }
+
+  /**
+   * Roughly how long the summary takes to read, at 200 words a minute.
+   *
+   * The chooser shows a count for every other mode, and the honest count here
+   * is 1, which tells a student nothing. Minutes answer the question they are
+   * actually asking when they look at this card.
+   */
+  function summaryMinutes(): number {
+    const text = topicSummary();
+    if (!text) return 0;
+
+    return Math.max(1, Math.round(text.split(/\s+/).length / 200));
+  }
+
   function modeCounts(): Record<StudyMode, number> {
     return {
       materials: materials.length,
+      summary: summaryMinutes(),
       questions: questions.length + paper.length,
       cards: questions.length,
     };
@@ -1201,6 +1290,17 @@ export default function Study() {
         // moves depending on what is loaded teaches the student nothing
         // about the order they should be working in.
         badge: "Start here",
+      },
+      {
+        key: "summary",
+        title: "Summary",
+        // Minutes, not "1 summary". Purple is the one category hue the other
+        // three modes do not use, so nothing had to be recoloured for it.
+        description: topicSummary()
+          ? `The whole topic, condensed · ${counts.summary} min read`
+          : "The whole topic, condensed · not written yet",
+        icon: "text-box-outline",
+        color: category.purple,
       },
       {
         key: "questions",
@@ -1292,6 +1392,7 @@ export default function Study() {
     // topic used to be reachable only by noticing a pill row above the
     // content; the choice is the screen now — unless the caller already
     // knows which one it wants.
+    if (requestedMode === "summary") loadTopicSummary(topic.id);
     setMode(requestedMode ?? null);
     setSheetOpen(!requestedMode);
     setSelectedAnswers({});
@@ -1597,82 +1698,50 @@ export default function Study() {
     if (questions.length === 0) return;
     setQuestionIndex((prev) => Math.max(prev - 1, 0));
   }
-  function getSummary(material: Material) {
-    if (hasText(material.summary_1)) {
-      return material.summary_1 as string;
-    }
-    return "No summary has been added for this material yet.";
-  }
-  function getSummaryPoints(material: Material) {
-    return hasText(material.summary_1) ? [material.summary_1 as string] : [];
-  }
-  async function downloadMaterialSummary(material: Material) {
-    if (downloadingSummaryId) return;
+  /**
+   * The same branded document the material expander produced, with the topic
+   * on it instead of a material title — a summary names the topic now.
+   */
+  async function downloadTopicSummary() {
+    if (downloadingSummary) return;
 
-    if (!hasText(material.summary_1)) return;
-    const summary = material.summary_1 as string;
+    const summary = summaryState.text;
+    if (!summary || !selectedTopic) return;
 
-    // Opened here, synchronously, while the tap is still the current user
-    // gesture. Every statement below this is async, and a popup requested
-    // after an await is blocked — which would leave nothing to print into.
+    const title = selectedTopic.title || "Summary";
     const printWindow = openPrintWindow();
 
-    setDownloadingSummaryId(material.id);
+    setDownloadingSummary(true);
 
     try {
-      let preparedFor: string | null = null;
-      const user = await sessionUser();
-
-      if (user) {
-        const { data: profileRow } = await supabase
-          .from("profiles")
-          .select("full_name, username")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        preparedFor = profileRow?.full_name || profileRow?.username || null;
-      }
-
       const logoDataUri = await getLogoDataUri();
 
       const html = buildSummaryHtml({
         logoDataUri,
-        materialTitle: material.title,
+        // The topic IS the title now. materialTitle is what the document
+        // template calls its heading; the value it carries is the topic.
+        materialTitle: title,
         courseCode: selectedCourse?.code,
         courseTitle: selectedCourse?.title,
-        topicTitle: selectedTopic?.title,
+        topicTitle: title,
         department: selectedCourse?.department,
         level: selectedCourse?.level,
-        preparedFor,
         summary,
       });
 
-      // expo-print has no working web implementation: printToFileAsync there
-      // is `window.print(); return undefined`, and this line used to
-      // destructure { uri, base64 } straight off that. The browser's own
-      // print-to-PDF is the only route to a real PDF file, so drive it from a
-      // hidden iframe carrying the same HTML the native path renders.
-      // The title IS the suggested PDF filename — see print-html.ts.
-      await printHtmlDocument(html, summaryPrintTitle(material.title), printWindow);
+      await printHtmlDocument(html, summaryPrintTitle(title), printWindow);
     } catch (error: any) {
-      console.log("SUMMARY PDF ERROR:", error);
-
-      // Never strand the blank popup we opened up front.
-      try {
-        if (printWindow && !printWindow.closed) printWindow.close();
-      } catch {
-        // Already gone.
-      }
-
+      printWindow?.close?.();
       showAlert(
         "error",
-        "Download Failed",
-        error?.message || "Could not generate this summary as a PDF. Please try again."
+        "Download failed",
+        error?.message || "Could not generate this summary as a PDF. Please try again.",
       );
     } finally {
-      setDownloadingSummaryId(null);
+      setDownloadingSummary(false);
     }
   }
+
   function moveToNextQuickCard(nextHardCardIds = hardCardIds) {
     if (quickDeck.length === 0) return;
     const nextIndex = quickCardIndex + 1;
@@ -2853,9 +2922,6 @@ export default function Study() {
         {materials.map((material) => {
           const materialTheme = getMaterialTheme(material.type);
           const tone = materialTheme.color;
-          const hasSummary = getSummaryPoints(material).length > 0;
-          const expanded = expandedSummaryId === String(material.id);
-          const isDownloading = downloadingSummaryId === material.id;
 
           return (
             <Card
@@ -2902,69 +2968,6 @@ export default function Study() {
                 />
               </Pressable>
 
-              {hasSummary ? (
-                <View>
-                  <Pressable
-                    onPress={() => {
-                      haptics.tap();
-                      setExpandedSummaryId(expanded ? null : String(material.id));
-                    }}
-                    style={[styles.summaryToggle, { borderTopColor: withAlpha(tone, 0.25) }]}
-                  >
-                    <MaterialCommunityIcons
-                      name="text-box-outline"
-                      size={17}
-                      color={tone}
-                    />
-                    <Text style={[styles.summaryToggleText, { color: tone }]}>
-                      Summary
-                    </Text>
-
-                    <Animated.View
-                      style={{
-                        transform: [{ rotate: expanded ? "180deg" : "0deg" }],
-                        transitionProperty: "transform",
-                        transitionDuration: motionTokens.fast,
-                      }}
-                    >
-                      <MaterialCommunityIcons name="chevron-down" size={20} color={tone} />
-                    </Animated.View>
-                  </Pressable>
-
-                  {expanded ? (
-                    <View style={styles.summaryBody}>
-                      <Text style={[styles.summaryText, { color: theme.muted }]}>
-                        {getSummary(material)}
-                      </Text>
-
-                      <TouchableOpacity
-                        onPress={() => downloadMaterialSummary(material)}
-                        disabled={isDownloading}
-                        style={[
-                          styles.downloadButton,
-                          {
-                            backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16),
-                            opacity: isDownloading ? 0.6 : 1,
-                          },
-                        ]}
-                      >
-                        {isDownloading ? (
-                          <ActivityIndicator size="small" color={tone} />
-                        ) : (
-                          <MaterialCommunityIcons
-                            name="tray-arrow-down"
-                            size={17}
-                            color={tone}
-                          />
-                        )}
-                        <Text style={[styles.downloadButtonText, { color: tone }]}>
-                          {isDownloading ? "Preparing…" : "Download PDF"}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
             </Card>
           );
         })}
@@ -3422,12 +3425,127 @@ export default function Study() {
       </Modal>
     );
   }
+
+  /** Mirrors the real screen: a heading, two blocks of prose, another heading. */
+  function renderSummarySkeleton() {
+    return (
+      <View style={styles.summaryDoc}>
+        <SkeletonBar theme={theme} width="62%" height={22} rounded={radius.xs} />
+
+        <View style={styles.summarySkelChips}>
+          <SkeletonBar theme={theme} width={92} height={24} rounded={radius.pill} />
+          <SkeletonBar theme={theme} width={78} height={24} rounded={radius.pill} />
+        </View>
+
+        {[0, 1].map((block) => (
+          <View key={block} style={styles.summarySkelBlock}>
+            <SkeletonBar theme={theme} width={block ? "38%" : "46%"} height={15} rounded={radius.xs} />
+            <View style={styles.summarySkelLines}>
+              {["100%", "97%", "88%", "64%"].map((width, i) => (
+                <SkeletonBar key={i} theme={theme} width={width} height={12} />
+              ))}
+            </View>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  function renderSummary() {
+    if (!selectedTopic) return null;
+
+    if (summaryState.status === "loading") return renderSummarySkeleton();
+
+    if (summaryState.status === "error") {
+      return (
+        <EmptyState
+          theme={theme}
+          icon="alert-circle-outline"
+          title="Could not load the summary"
+          text="The connection dropped on the way. Your place in the topic is kept."
+          actionLabel="Try again"
+          onAction={() => loadTopicSummary(selectedTopic.id)}
+        />
+      );
+    }
+
+    if (!summaryState.text) {
+      return (
+        <EmptyState
+          theme={theme}
+          icon="text-box-outline"
+          title="No summary for this topic yet"
+          text="Nothing has been written for this topic. The materials are still here."
+          actionLabel="Open materials"
+          onAction={() => setMode("materials")}
+        />
+      );
+    }
+
+    return (
+      <View style={styles.summaryDoc}>
+        {/* Markdown, rendered. Admin writes it in a plain text box, and until
+            now it reached the student with its ## and ** intact. Markdown
+            renders to React Native components here, so nothing is ever handed
+            to a DOM and raw HTML in a summary cannot execute. */}
+        <Markdown
+          value={summaryState.text}
+          flatListProps={{
+            scrollEnabled: false,
+            initialNumToRender: 24,
+            // The library paints its own surface, and its default is a dark
+            // one — on the cream page the whole summary came out as a black
+            // slab. The background belongs to the page, not to the renderer.
+            style: styles.summaryMarkdownList,
+            contentContainerStyle: styles.summaryMarkdown,
+          }}
+          // Colours and styles are separate props: the style map below sets
+          // size and weight, and these set what the renderer falls back to
+          // for anything the map does not name.
+          theme={{
+            colors: {
+              text: theme.muted,
+              link: theme.accent,
+              border: theme.border,
+              code: theme.soft,
+            },
+          }}
+          styles={summaryMarkdownStyles(theme)}
+        />
+
+        <TouchableOpacity
+          onPress={downloadTopicSummary}
+          disabled={downloadingSummary}
+          style={[
+            styles.downloadButton,
+            {
+              backgroundColor: withAlpha(category.purple, isDark ? 0.24 : 0.16),
+              opacity: downloadingSummary ? 0.6 : 1,
+              alignSelf: "flex-start",
+              marginTop: spacing.xxl,
+            },
+          ]}
+        >
+          {downloadingSummary ? (
+            <ActivityIndicator size="small" color={category.purple} />
+          ) : (
+            <MaterialCommunityIcons name="tray-arrow-down" size={17} color={category.purple} />
+          )}
+          <Text style={[styles.downloadButtonText, { color: category.purple }]}>
+            Download as PDF
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   function renderActiveContent() {
     // No mode chosen yet means the chooser is the screen, and the topic
     // list stays underneath it.
     if (!selectedTopic || !mode) return renderTopicList();
     if (mode === "questions") return renderQuestions();
     if (mode === "materials") return renderMaterials();
+    if (mode === "summary") return renderSummary();
     if (mode === "cards") return renderQuickCards();
     return renderTopicList();
   }
@@ -3485,7 +3603,18 @@ export default function Study() {
           const next = event.nativeEvent.contentOffset.y > 12;
           if (next !== headerCollapsed) setHeaderCollapsed(next);
         }}
-        contentContainerStyle={[styles.scroll, !selectedCourse && styles.courseOnlyScroll, contentInset]}
+        contentContainerStyle={[
+          styles.scroll,
+          !selectedCourse && styles.courseOnlyScroll,
+          // Derived, not the sheet's flat 132. A summary is the longest
+          // single scroll in this screen and its last line is the one that
+          // matters, so the clearance is measured from what is actually down
+          // there — the tab bar's own height and offset, plus the phone's
+          // safe area — rather than from a literal that happened to be right
+          // for a list on one handset.
+          mode === "summary" ? { paddingBottom: summaryTail } : null,
+          contentInset,
+        ]}
       >
         {/* Three states, not two. Browsing wants the whole width for the
             grid; an open course wants a narrow list beside real content.
@@ -3579,22 +3708,75 @@ export default function Study() {
     </View>
   );
 }
+/**
+ * How a summary is set.
+ *
+ * react-native-marked renders Markdown to React Native components, so this is
+ * a style map rather than a stylesheet — and it is also why raw HTML inside a
+ * summary cannot execute: nothing here ever reaches a DOM.
+ *
+ * Every value comes from the app's own scale. A library's defaults would be a
+ * second typographic system living inside one screen.
+ */
+function summaryMarkdownStyles(theme: any) {
+  return {
+    h1: { ...typeScale.title, color: theme.text, marginBottom: spacing.sm },
+    h2: { ...typeScale.title, fontSize: 20, lineHeight: 26, color: theme.text, marginTop: spacing.xl, marginBottom: spacing.sm },
+    h3: { ...typeScale.bodyLg, fontWeight: weight.black, color: theme.text, marginTop: spacing.xl, marginBottom: spacing.sm },
+    h4: { ...typeScale.body, fontWeight: weight.black, color: theme.text, marginTop: spacing.lg, marginBottom: spacing.xs },
+    text: { ...typeScale.body, fontWeight: weight.regular, lineHeight: 23, color: theme.muted },
+    strong: { fontWeight: weight.bold, color: theme.text },
+    em: { fontStyle: "italic" as const },
+    paragraph: { marginBottom: spacing.md },
+    li: { ...typeScale.body, fontWeight: weight.regular, lineHeight: 22, color: theme.muted },
+    hr: { backgroundColor: theme.border, height: StyleSheet.hairlineWidth, marginVertical: spacing.xl },
+    link: { color: theme.accent, fontWeight: weight.semi },
+    blockquote: {
+      borderLeftWidth: 3,
+      borderLeftColor: withAlpha(category.purple, 0.5),
+      paddingLeft: spacing.md,
+      marginVertical: spacing.md,
+    },
+    codespan: { ...typeScale.caption, letterSpacing: 0, color: theme.text, backgroundColor: theme.soft },
+    code: { backgroundColor: theme.soft, borderRadius: radius.sm, padding: spacing.md },
+    codeText: { ...typeScale.caption, letterSpacing: 0, color: theme.text },
+    table: { borderColor: theme.border },
+  } as any;
+}
+
 function EmptyState({
   theme,
   icon,
   title,
   text,
+  /** An empty state with somewhere to go beats one that only says no. */
+  actionLabel,
+  onAction,
+  tone,
 }: {
   theme: any;
   icon: string;
   title: string;
   text: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  /** Overrides the glyph colour, for states that are not simply absence. */
+  tone?: string;
 }) {
   return (
     <View style={[styles.emptyCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
-      <MaterialCommunityIcons name={icon as any} size={42} color={theme.orange} />
+      <MaterialCommunityIcons name={icon as any} size={42} color={tone ?? theme.orange} />
       <Text style={[styles.emptyTitle, { color: theme.text }]}>{title}</Text>
       <Text style={[styles.emptyText, { color: theme.muted }]}>{text}</Text>
+
+      {actionLabel && onAction ? (
+        <TouchableOpacity
+          onPress={onAction}
+          style={[styles.emptyAction, { borderColor: theme.border }]}
+        >
+          <Text style={[styles.emptyActionText, { color: theme.text }]}>{actionLabel}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -3888,25 +4070,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.md,
   },
-  summaryToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  // --- the summary screen --------------------------------------------------
+  summaryDoc: { paddingTop: spacing.xs },
+  summaryMarkdown: { paddingBottom: 0, backgroundColor: "transparent" },
+  summaryMarkdownList: { backgroundColor: "transparent" },
+  summarySkelChips: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg },
+  summarySkelBlock: { marginTop: spacing.xxl, gap: spacing.md },
+  summarySkelLines: { gap: 10 },
+  emptyAction: {
     marginTop: spacing.lg,
-    paddingTop: spacing.md,
-    minHeight: 40,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
   },
-  summaryToggleText: {
-    ...typeScale.caption,
-    fontWeight: weight.bold,
-    letterSpacing: 0,
-    flex: 1,
-  },
-  summaryBody: {
-    marginTop: spacing.md,
-    gap: spacing.md,
-  },
+  emptyActionText: { ...typeScale.caption, letterSpacing: 0 },
 
   courseFixedTop: {
     paddingTop: 42,
@@ -4222,12 +4400,6 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
-  },
-  summaryText: {
-    marginTop: 10,
-    fontSize: 14,
-    lineHeight: 22,
-    fontWeight: "700",
   },
   downloadButton: {
     flexDirection: "row",

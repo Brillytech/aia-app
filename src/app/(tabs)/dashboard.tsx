@@ -95,7 +95,6 @@ type MaterialItem = {
   id: string | number;
   title: string;
   type: string | null;
-  summary_1?: string | null;
   course_id?: string | null;
   topic_id?: string | null;
   courseCode: string | null;
@@ -811,7 +810,6 @@ export default function Dashboard() {
         id,
         title,
         type,
-        summary_1,
         course_id,
         topic_id,
         courses (
@@ -835,7 +833,6 @@ export default function Dashboard() {
         id: item.id,
         title: item.title || "Study material",
         type: item.type || "Material",
-        summary_1: item.summary_1 || null,
         course_id: item.course_id,
         topic_id: item.topic_id,
         courseCode: item.courses?.code || item.courses?.title || null,
@@ -1608,7 +1605,7 @@ export default function Dashboard() {
                       icon={getMaterialIcon(item.type)}
                       label={item.title || "Material"}
                       value={item.courseCode || undefined}
-                      secondary={item.summary_1 || undefined}
+                      secondary={item.type || undefined}
                       onPress={() => openInStudy(item.course_id, item.topic_id)}
                     />
                   ))
@@ -1820,7 +1817,7 @@ export default function Dashboard() {
                   icon={getMaterialIcon(item.type)}
                   label={item.title || "Material"}
                   value={item.courseCode || undefined}
-                  secondary={item.summary_1 || undefined}
+                  secondary={item.type || undefined}
                   onPress={() => openInStudy(item.course_id, item.topic_id)}
                 />
               ))

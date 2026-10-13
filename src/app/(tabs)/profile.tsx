@@ -15,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
+import { countCompletedEver } from "../../materials/completions";
 import { readSession, sessionUser } from "../../session";
 import { usePremium } from "../../premium";
 import { category, useThemeMode, type AlertType, type Theme } from "../../theme";
@@ -58,7 +59,6 @@ type Profile = {
 type ProgressSummary = {
   questions_studied: number | null;
   questions_correct: number | null;
-  materials_opened: number | null;
   progress_percent: number | null;
 };
 
@@ -94,6 +94,8 @@ export default function ProfilePage() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [progress, setProgress] = useState<ProgressSummary[]>([]);
+  /** Distinct materials ever completed; counted server-side, not summed here. */
+  const [materialsDone, setMaterialsDone] = useState(0);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [totalXp, setTotalXp] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -188,10 +190,15 @@ export default function ProfilePage() {
 
       const { data: progressData } = await supabase
         .from("user_progress")
-        .select("questions_studied, questions_correct, materials_opened, progress_percent")
+        .select("questions_studied, questions_correct, progress_percent")
         .eq("user_id", user.id);
 
       setProgress(progressData || []);
+
+      // Distinct materials ever marked done. A count through the
+      // security_invoker view, so the server returns a number and no rows —
+      // and still only this student's.
+      setMaterialsDone(await countCompletedEver());
 
       const { data: activityData } = await supabase
         .from("user_activity_logs")
@@ -425,9 +432,16 @@ export default function ProfilePage() {
     return progress.reduce((sum, item) => sum + (item.questions_correct || 0), 0);
   }, [progress]);
 
-  const totalMaterials = useMemo(() => {
-    return progress.reduce((sum, item) => sum + (item.materials_opened || 0), 0);
-  }, [progress]);
+  /**
+   * Distinct materials completed, not materials opened.
+   *
+   * The old number summed `user_progress.materials_opened`, a counter that
+   * went up on every open — so re-reading one PDF across three days read as
+   * three materials. Nothing is backfilled from it: that counter cannot tell
+   * an open from a completion, so importing it would import the inflation.
+   * The stat starts from zero and is earned again.
+   */
+  const totalMaterials = materialsDone;
 
   const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
 

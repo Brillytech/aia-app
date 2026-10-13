@@ -576,6 +576,11 @@ export function ReportBody({ theme, report }: { theme: Theme; report: WeeklyRepo
     <View style={styles.tile}>
       <Stat theme={theme} size="major" value={report.topicsCompleted} label="Topics completed" />
     </View>
+    {/* Distinct, so re-reading one PDF on three days is still one material.
+        Next to Topics completed because they are the same kind of number. */}
+    <View style={styles.tile}>
+      <Stat theme={theme} size="major" value={report.materialsCompleted} label="Materials completed" />
+    </View>
     <View style={styles.tile}>
       <Stat
         theme={theme}

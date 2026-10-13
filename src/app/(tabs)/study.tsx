@@ -1,5 +1,4 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 // TODO: Enable when app is ready for production.
 // import * as ScreenCapture from "expo-screen-capture";
 import { Asset } from "expo-asset";
@@ -28,9 +27,7 @@ import { useBreakpoint, useContentInset } from "../../ui/layout/breakpoints";
 import { SplitPane } from "../../ui/layout/SplitPane";
 import { AlertModal } from "../../ui/AlertModal";
 import type { IconName } from "../../ui/alerts";
-import { Card } from "../../ui/Card";
 import { haptics } from "../../ui/haptics";
-import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import Markdown from "react-native-marked";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -72,6 +69,14 @@ import { SkeletonBar, SkeletonSlot } from "../../ui/Skeleton";
 import { subjectColor, subjectIcon } from "../../ui/subject";
 import { useReducedMotion } from "react-native-reanimated";
 
+import {
+  doneLabel,
+  loadCompletions,
+  markDone,
+  today as localToday,
+  unmarkToday,
+  type CompletionMap,
+} from "../../materials/completions";
 import { layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
   id: string;
@@ -367,52 +372,6 @@ function sameLevel(a?: string | null, b?: string | null) {
   if (!first || !second) return false;
   return first === second;
 }
-const MATERIALS_SEEN_KEY = "lasu_scholar_materials_seen";
-
-function getTodayDateKey(date = new Date()) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 10);
-}
-
-/**
- * True the first time a material is opened today, false on every reopen.
- *
- * The daily goal counts `user_progress.materials_opened`, which was
- * incremented on every open — so reading the same PDF three times logged
- * three materials. This gates the increment on a day-scoped set of ids.
- *
- * The stored date IS the reset: when the key's date no longer matches today,
- * the whole record is replaced rather than appended to, so it self-prunes and
- * never grows beyond one day's ids.
- *
- * Device-local by design — it needs no schema change. A reinstall or a second
- * device starts a fresh day, which can only ever under-count, never inflate.
- */
-async function shouldCountMaterialToday(materialId: string) {
-  const today = getTodayDateKey();
-
-  try {
-    const raw = await AsyncStorage.getItem(MATERIALS_SEEN_KEY);
-    const saved = raw ? JSON.parse(raw) : null;
-
-    const ids: string[] =
-      saved && saved.date === today && Array.isArray(saved.ids) ? saved.ids : [];
-
-    if (ids.includes(materialId)) return false;
-
-    await AsyncStorage.setItem(
-      MATERIALS_SEEN_KEY,
-      JSON.stringify({ date: today, ids: [...ids, materialId] }),
-    );
-
-    return true;
-  } catch {
-    // Storage failure shouldn't block opening the material; counting it is
-    // the lesser problem.
-    return true;
-  }
-}
-
 function assignmentMatchesProfile(assignment: any, profile: any) {
   const schoolMatch = sameProfileValue(assignment.school, profile?.school);
   const departmentMatch = sameProfileValue(
@@ -902,6 +861,16 @@ export default function Study() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
+  /**
+   * Which materials are finished, and when.
+   *
+   * Server-only — there is no local queue behind this, unlike the cards. The
+   * tick moves immediately and is put back if the write fails, which is the
+   * whole of the offline story for a single deliberate tap.
+   */
+  const [completions, setCompletions] = useState<CompletionMap>({});
+  /** Ids with a write in flight, so a double tap cannot race itself. */
+  const [completionBusy, setCompletionBusy] = useState<Record<string, boolean>>({});
   const [loadingCourses, setLoadingCourses] = useState(true);
   const [loadingTopics, setLoadingTopics] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
@@ -1562,6 +1531,13 @@ export default function Study() {
       .catch((error) => console.log("CARD LOAD FAILED:", error));
     flushPending().catch(() => {});
     setMaterials(mats && mats.length > 0 ? mats : []);
+
+    // Which of them are already done. A list that cannot show ticks is still
+    // a usable list, so a failure here resolves to {} rather than blocking.
+    const materialIds = (mats || []).map((row: any) => String(row.id)).filter(isUuid);
+    loadCompletions(materialIds)
+      .then(setCompletions)
+      .catch((error) => console.log("COMPLETIONS LOAD FAILED:", error));
     describeRow("theory_questions", theoryRows?.[0]);
     describeRow("grid_questions", gridRows?.[0]);
 
@@ -1721,7 +1697,6 @@ export default function Study() {
   async function updateStudyProgress(payload?: {
     questionId?: string;
     answeredCorrect?: boolean;
-    materialOpened?: boolean;
     progressPercent?: number;
     quickCardRating?: FlashRating;
   }) {
@@ -1745,13 +1720,10 @@ export default function Study() {
       const existing = existingRows?.[0];
       const shouldCountQuestion = Boolean(payload?.questionId);
       const shouldCountCorrect = Boolean(payload?.questionId && payload?.answeredCorrect);
-      const shouldCountMaterial = Boolean(payload?.materialOpened);
       const nextQuestionsStudied =
         (existing?.questions_studied || 0) + (shouldCountQuestion ? 1 : 0);
       const nextQuestionsCorrect =
         (existing?.questions_correct || 0) + (shouldCountCorrect ? 1 : 0);
-      const nextMaterialsOpened =
-        (existing?.materials_opened || 0) + (shouldCountMaterial ? 1 : 0);
       const derivedQuestionProgress =
         questions.length > 0
           ? Math.round((nextQuestionsStudied / questions.length) * 100)
@@ -1769,7 +1741,10 @@ export default function Study() {
         last_question_id: safeQuestionId || existing?.last_question_id || null,
         questions_studied: nextQuestionsStudied,
         questions_correct: nextQuestionsCorrect,
-        materials_opened: nextMaterialsOpened,
+        // `materials_opened` is deliberately absent. PostgREST builds its
+        // ON CONFLICT DO UPDATE SET from the payload's keys, so leaving it out
+        // means existing rows keep their historical value untouched rather
+        // than being zeroed. See the migration.
         last_quick_card_rating:
           payload?.quickCardRating || existing?.last_quick_card_rating || null,
         progress_percent: Math.min(100, nextProgressPercent),
@@ -1954,19 +1929,80 @@ export default function Study() {
   function currentCardSaved(): boolean {
     return Boolean(currentQuickCard && cardStore[currentQuickCard.id]?.saved);
   }
+  /** Whether this material's tick is filled right now. */
+  function isDoneToday(materialId: string): boolean {
+    return Boolean(completions[materialId]?.doneToday);
+  }
+
+  /**
+   * Toggle today's completion.
+   *
+   * Optimistic: the tick moves first, because the student already knows what
+   * they tapped and a spinner on a checkbox reads as a fault. If the write
+   * fails the tick goes back exactly where it was and a short message says
+   * so — the one case where silence would be a lie.
+   */
+  async function toggleDone(material: Material) {
+    const id = String(material.id);
+    if (completionBusy[id]) return;
+
+    const before = completions[id];
+    const wasDone = Boolean(before?.doneToday);
+    const now = localToday();
+
+    setCompletionBusy((prev) => ({ ...prev, [id]: true }));
+    setCompletions((prev) => ({
+      ...prev,
+      [id]: wasDone
+        ? {
+            doneToday: false,
+            // Un-ticking today does not erase an older completion; only
+            // today's row goes. If today WAS the only one, there is nothing
+            // left to date.
+            lastCompletedOn:
+              before?.lastCompletedOn && before.lastCompletedOn !== now
+                ? before.lastCompletedOn
+                : null,
+          }
+        : { doneToday: true, lastCompletedOn: now },
+    }));
+
+    const result = wasDone ? await unmarkToday(id) : await markDone(id);
+
+    setCompletionBusy((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    if (!result.ok) {
+      // Put it back exactly as it was, including a null that was null.
+      setCompletions((prev) => {
+        const next = { ...prev };
+        if (before) next[id] = before;
+        else delete next[id];
+        return next;
+      });
+      showAlert(
+        "warning",
+        wasDone ? "Could not undo" : "Could not save",
+        "That did not reach the server. Check your connection and try again.",
+      );
+    }
+  }
+
   async function openMaterial(material: Material) {
     const kind = getMaterialKind(material.type);
     const url = material.file_url || material.video_url;
 
-    // Count a material once per day. Reopening it still refreshes progress,
-    // it just doesn't move the goal again.
-    const countIt = await shouldCountMaterialToday(String(material.id));
-
+    // Opening counts for nothing now. Finishing is a deliberate tap, and
+    // `user_material_completions` is the only thing that records it.
+    //
+    // The 10% is kept on purpose: it is topic progress, not the Materials
+    // stat, and says "this topic has been started" — which opening a material
+    // genuinely does.
     requestAnimationFrame(() => {
-      updateStudyProgress({
-        materialOpened: countIt,
-        progressPercent: 10,
-      });
+      updateStudyProgress({ progressPercent: 10 });
     });
     if (kind === "video") {
       if (!url) {
@@ -2403,20 +2439,18 @@ export default function Study() {
     return (
       <View style={styles.list}>
         {rows.map((row, index) => (
-          <View
-            key={index}
-            style={[
-              styles.materialCard,
-              styles.skelCard,
-              { backgroundColor: theme.card, borderColor: theme.border },
-            ]}
-          >
-            <SkeletonBar theme={theme} width={40} height={40} rounded={14} />
+          <View key={index} style={[styles.materialRow, { backgroundColor: theme.soft }]}>
+            {/* Shaped like the row it stands in for, down to the tick on the
+                right — a skeleton that resolves into a different layout is
+                just a different kind of jump. */}
+            <SkeletonBar theme={theme} width={22} height={22} rounded={11} />
 
             <View style={styles.flex1}>
               <SkeletonBar theme={theme} width={row.title} height={15} />
-              <SkeletonBar theme={theme} width={row.tag} height={18} style={styles.skelGap} />
+              <SkeletonBar theme={theme} width={row.tag} height={11} style={styles.skelGap} />
             </View>
+
+            <SkeletonBar theme={theme} width={26} height={26} rounded={13} />
           </View>
         ))}
       </View>
@@ -3054,54 +3088,64 @@ export default function Study() {
       <View style={styles.list}>
         {materials.map((material) => {
           const materialTheme = getMaterialTheme(material.type);
-          const tone = materialTheme.color;
+          const id = String(material.id);
+          const done = isDoneToday(id);
+          const last = completions[id]?.lastCompletedOn ?? null;
+
+          // The type pill is gone. A row full of coloured chrome said
+          // "PDF" in three places at once and left no colour to mean
+          // anything; the type now rides the meta line, and colour is
+          // reserved for the one state worth announcing.
+          const meta = last
+            ? `${material.type.toUpperCase()} · ${doneLabel(last)}`
+            : material.type.toUpperCase();
 
           return (
-            <Card
+            <View
               key={material.id}
-              theme={theme}
-              tone={tone}
-              backgroundColor={theme.card}
-              borderColor={theme.border}
-              shadowColor={theme.shadow}
-              radiusSize="lg"
-              style={styles.materialCard}
+              style={[styles.materialRow, { backgroundColor: theme.soft }]}
             >
               <Pressable
                 onPress={() => openMaterial(material)}
-                style={styles.materialHead}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${material.title}`}
+                style={styles.materialRowBody}
               >
-                <IconPlate theme={theme} icon={materialTheme.icon} color={tone} size="md" />
+                <MaterialCommunityIcons
+                  name={materialTheme.icon}
+                  size={22}
+                  color={theme.muted}
+                />
 
                 <View style={styles.flex1}>
-                  <Text style={[styles.materialTitle, { color: theme.text }]}>
+                  <Text style={[styles.materialTitle, { color: theme.text }]} numberOfLines={2}>
                     {material.title}
                   </Text>
-
-                  <View
-                    style={[
-                      styles.materialTag,
-                      { backgroundColor: withAlpha(tone, isDark ? 0.24 : 0.16) },
-                    ]}
-                  >
-                    <Text style={[styles.materialTagText, { color: tone }]}>
-                      {material.type.toUpperCase()}
-                    </Text>
-                  </View>
+                  {/* One line whether or not it carries a date, so the row
+                      keeps its height when the tick toggles. */}
+                  <Text style={[styles.materialMeta, { color: done ? theme.success : theme.muted }]}>
+                    {meta}
+                  </Text>
                 </View>
-
-                <MaterialCommunityIcons
-                  name={
-                    getMaterialKind(material.type) === "video"
-                      ? "open-in-new"
-                      : "eye-outline"
-                  }
-                  size={22}
-                  color={withAlpha(tone, 0.75)}
-                />
               </Pressable>
 
-            </Card>
+              {/* The tick changes fill, never size: nothing reflows. hitSlop
+                  carries the target to 48 without growing the glyph. */}
+              <Pressable
+                onPress={() => toggleDone(material)}
+                hitSlop={14}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: done }}
+                accessibilityLabel={done ? `Mark ${material.title} not done` : `Mark ${material.title} done`}
+                style={styles.materialTick}
+              >
+                <MaterialCommunityIcons
+                  name={done ? "check-circle" : "checkbox-blank-circle-outline"}
+                  size={26}
+                  color={done ? theme.success : theme.muted2}
+                />
+              </Pressable>
+            </View>
           );
         })}
       </View>
@@ -3665,6 +3709,26 @@ export default function Study() {
                 {String(material.type || "Material").toUpperCase()}
               </Text>
             </View>
+            {/* In the header because it is the only place every type can
+                reach: PDFs, images and links render inside a frame the app
+                cannot see into, so there is no "end of the document" to put
+                this after. Notes get one at the end as well. */}
+            <TouchableOpacity
+              onPress={() => toggleDone(material)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: isDoneToday(String(material.id)) }}
+              accessibilityLabel={
+                isDoneToday(String(material.id)) ? "Mark not done" : "Mark as done"
+              }
+              style={styles.viewerExternalBtn}
+            >
+              <MaterialCommunityIcons
+                name={isDoneToday(String(material.id)) ? "check-circle" : "check-circle-outline"}
+                size={22}
+                color={isDoneToday(String(material.id)) ? theme.success : theme.muted}
+              />
+            </TouchableOpacity>
+
             {rawUrl ? (
               <TouchableOpacity
                 onPress={() => Linking.openURL(rawUrl)}
@@ -3679,6 +3743,38 @@ export default function Study() {
               <Text style={[styles.noteViewerText, { color: theme.text }]}>
                 {material.content || "No note has been added for this material yet."}
               </Text>
+
+              {/* Notes are the one kind with a real end to reach, so the
+                  action can sit where the reading finishes instead of
+                  sending someone back up to the header. */}
+              <TouchableOpacity
+                onPress={() => toggleDone(material)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: isDoneToday(String(material.id)) }}
+                style={[
+                  styles.noteDoneBtn,
+                  {
+                    borderColor: isDoneToday(String(material.id)) ? theme.success : theme.border,
+                    backgroundColor: isDoneToday(String(material.id))
+                      ? withAlpha(theme.success, isDark ? 0.18 : 0.12)
+                      : "transparent",
+                  },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name={isDoneToday(String(material.id)) ? "check-circle" : "check-circle-outline"}
+                  size={20}
+                  color={isDoneToday(String(material.id)) ? theme.success : theme.muted}
+                />
+                <Text
+                  style={[
+                    styles.noteDoneText,
+                    { color: isDoneToday(String(material.id)) ? theme.success : theme.text },
+                  ]}
+                >
+                  {isDoneToday(String(material.id)) ? "Done today" : "Mark as done"}
+                </Text>
+              </TouchableOpacity>
             </ScrollView>
           ) : kind === "image" && rawUrl ? (
             <MaterialFrame
@@ -4365,14 +4461,45 @@ const styles = StyleSheet.create({
     fontWeight: weight.regular,
     letterSpacing: 0,
   },
-  materialCard: {
-    padding: spacing.lg,
-  },
-  materialHead: {
+  // Practice's optionRow metrics, so a selectable row reads the same
+  // wherever it appears in the app.
+  materialRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
+    paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    marginBottom: 6,
+    minHeight: 48,
   },
+  materialRowBody: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    minHeight: 48,
+  },
+  // 48 via hitSlop rather than padding, so the glyph stays put.
+  materialTick: {
+    alignItems: "center",
+    justifyContent: "center",
+    width: 26,
+    height: 26,
+  },
+  noteDoneBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    alignSelf: "center",
+    minHeight: 48,
+    paddingHorizontal: spacing.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+    marginTop: spacing.xxl,
+  },
+  noteDoneText: { ...typeScale.body, fontWeight: weight.semi },
   // --- the summary screen --------------------------------------------------
   summaryDoc: { paddingTop: spacing.xs },
   summaryMarkdown: { paddingBottom: 0, backgroundColor: "transparent" },
@@ -4742,16 +4869,10 @@ const styles = StyleSheet.create({
     ...typeScale.bodyLg,
     fontWeight: weight.semi,
   },
-  materialTag: {
-    alignSelf: "flex-start",
-    marginTop: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xxs,
-    borderRadius: radius.pill,
-  },
-  materialTagText: {
+  materialMeta: {
     ...typeScale.micro,
     letterSpacing: 0.4,
+    marginTop: 2,
   },
   smallIconCircle: {
     width: 56,

@@ -18,6 +18,7 @@ import Reanimated, {
   withTiming,
 } from "react-native-reanimated";
 import { supabase } from "../../../lib/supabase";
+import { countCompletedToday } from "../../materials/completions";
 import { readSession, sessionUser } from "../../session";
 import { category, Theme, useThemeMode } from "../../theme";
 import type { IconName } from "../../ui/alerts";
@@ -935,11 +936,9 @@ export default function Dashboard() {
       ).size;
     }
 
-    let materialsOpened = 0;
-
+    // The questions tally still comes off these rows; only the materials
+    // number has moved.
     if (!progressRows.error && progressRows.data) {
-      const openedMaterialIds = new Set<string>();
-
       progressRows.data.forEach((row: any) => {
         questionsAnswered += toNumber(
           row.questions_studied ||
@@ -947,25 +946,19 @@ export default function Dashboard() {
             row.answered_questions,
           0,
         );
-
-        if (row.material_id) openedMaterialIds.add(String(row.material_id));
-        else if (row.content_id) openedMaterialIds.add(String(row.content_id));
-        else if (row.materials_opened)
-          openedMaterialIds.add(`opened-${row.topic_id || row.id}`);
       });
-
-      // The distinct-id set is the honest number when the rows carry one.
-      // Falling back to the summed counter only when no ids are present —
-      // the old Math.max let the raw sum win whenever it was larger, which
-      // is exactly the reopen inflation this is meant to avoid.
-      materialsOpened =
-        openedMaterialIds.size > 0
-          ? openedMaterialIds.size
-          : progressRows.data.reduce(
-              (sum: number, row: any) => sum + toNumber(row.materials_opened, 0),
-              0,
-            );
     }
+
+    /**
+     * Distinct materials marked done today.
+     *
+     * No DISTINCT is needed: user_material_completions is keyed
+     * (user_id, material_id, completed_on), so a material can appear at most
+     * once in a day and the row count IS the distinct count. The day is the
+     * student's local one, from localDayKey — the same boundary the streak
+     * and the weekly report use.
+     */
+    const materialsOpened = await countCompletedToday(userId);
 
     setDailyProgress({
       questionsAnswered,

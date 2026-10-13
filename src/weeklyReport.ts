@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../lib/supabase";
 import { localDayKey, localWeekDays, startOfLocalWeek } from "./days";
+import { countCompletedInDays } from "./materials/completions";
 import { notifyAndPopup } from "./notify";
 import { sessionUser } from "./session";
 import { category } from "./theme";
@@ -62,6 +63,8 @@ export type WeeklyReport = {
   xp: number;
   streakDays: number;
   topicsCompleted: number;
+  /** Distinct materials marked done in this week, counted once each. */
+  materialsCompleted: number;
   sessions: number;
   /** Busiest day of the week, or null when nothing was logged. */
   bestDay: DayBar | null;
@@ -323,6 +326,18 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
   const xp = (xpRows.data || []).reduce((sum: number, row: any) => sum + (Number(row.xp) || 0), 0);
   const topicsCompleted = topics.count || 0;
 
+  /**
+   * Counted against the week's local day keys, not a timestamp range.
+   *
+   * `completed_on` is already the student's local calendar day, so matching
+   * it to `localWeekDays` keeps this on the same boundary as the chart above
+   * it. Distinct-ing happens on the client because a material finished on two
+   * days in one week is two rows but one material — and the totals view
+   * cannot answer that for a PAST week, where max(completed_on) may fall
+   * outside the window being asked about.
+   */
+  const materialsCompleted = await countCompletedInDays(userId, localWeekDays(weekStart));
+
   const withTime = days.filter((day) => day.minutes > 0);
   const bestDay = withTime.length
     ? withTime.reduce((best, day) => (day.minutes > best.minutes ? day : best))
@@ -342,11 +357,16 @@ export async function loadWeeklyReport(userId: string, offset = 0): Promise<Week
     xp,
     streakDays,
     topicsCompleted,
+    materialsCompleted,
     sessions,
     bestDay,
     topCourses,
     questionsByCourse,
-    isEmpty: minutes === 0 && questionsAnswered === 0 && topicsCompleted === 0,
+    isEmpty:
+      minutes === 0 &&
+      questionsAnswered === 0 &&
+      topicsCompleted === 0 &&
+      materialsCompleted === 0,
   };
 }
 

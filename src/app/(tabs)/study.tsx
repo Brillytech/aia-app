@@ -10,6 +10,7 @@ import {
   Animated,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -33,6 +34,31 @@ import { IconPlate } from "../../ui/IconPlate";
 import { MaterialFrame } from "../../ui/MaterialFrame";
 import Markdown from "react-native-marked";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  buildQueue,
+  canLearnAhead,
+  deckCounts,
+  formatCountdown,
+  nextDueAt,
+  skipToNext,
+  type DeckTab,
+  type QueueCard,
+} from "../../cards/queue";
+import {
+  DEFAULT_CONFIG,
+  intervalLabel,
+  review as scheduleReview,
+  type Rating,
+  type SchedulerConfig,
+} from "../../cards/scheduler";
+import {
+  blankCard,
+  countPending,
+  flushPending,
+  loadCards,
+  saveCard,
+  type CardMap,
+} from "../../cards/store";
 import { ModeBar, ModeOptions, ModeSheet, type ModeOption, type StudyMode } from "../../ui/ModeSheet";
 import { Segmented } from "../../ui/Segmented";
 import { marksFor, ratingFraction, scoreTopic, type ScoredItem, type SelfCheck } from "../../theoryScore";
@@ -44,6 +70,8 @@ import { FOLDER_OPEN_MS } from "../../ui/CourseFolder";
 import { CourseTile, courseTileLayout } from "../../ui/CourseTile";
 import { SkeletonBar, SkeletonSlot } from "../../ui/Skeleton";
 import { subjectColor, subjectIcon } from "../../ui/subject";
+import { useReducedMotion } from "react-native-reanimated";
+
 import { layout, motion as motionTokens, noFocusRing, radius, spacing, type as typeScale, weight, withAlpha } from "../../ui/tokens";
 type Course = {
   id: string;
@@ -277,15 +305,16 @@ function normalizeMode(value?: string | string[]): StudyMode | null {
 }
 
 /** The three flashcard decks, in the order the auto-cycle already visits them. */
-const DECKS: { key: "all" | "saved" | "hard"; label: string }[] = [
+const DECKS: { key: DeckTab; label: string }[] = [
   { key: "all", label: "All" },
+  // Due is what Anki opens on: the cards the scheduler says are ready.
+  { key: "due", label: "Due" },
   { key: "saved", label: "Saved" },
-  // "Struggled", not "Hard". hardCardIds is append-only — rating a card Hard
-  // adds it and nothing ever removes it, so a card later rated Good stays in
-  // this deck. The browser groups by the LIVE rating, so a pill called "Hard"
-  // would sit next to a "Hard" section holding different cards. Past tense
+  // "Struggled", not "Hard". The deck is every card whose ease has fallen
+  // below the starting 250 — a measure that moves both ways, so a card joins
+  // when it goes badly and leaves once it has recovered. Past tense
   // says what the list actually is: everything you have ever found hard.
-  { key: "hard", label: "Struggled" },
+  { key: "struggled", label: "Struggled" },
 ];
 
 /**
@@ -846,6 +875,14 @@ export default function Study() {
   const wide = useBreakpoint(STUDY_SPLIT);
   const contentInset = useContentInset();
   const insets = useSafeAreaInsets();
+  /**
+   * Honoured by the card player only.
+   *
+   * The flip hinge is a rotation, which is exactly what someone who turns
+   * this on is asking not to see. The progress fill goes with it: a bar that
+   * slides while the card snaps would read as a glitch rather than a choice.
+   */
+  const reduceMotion = useReducedMotion();
 
   /** Clears the tab bar, its offset and the phone's safe area, with a breath. */
   const summaryTail = Math.max(insets.bottom, 12) + TAB_BAR_BLOCK + spacing.xxxl;
@@ -908,11 +945,26 @@ export default function Study() {
   const [theoryDone, setTheoryDone] = useState(false);
   const [quickCardIndex, setQuickCardIndex] = useState(0);
   const [showBack, setShowBack] = useState(false);
+
+  /**
+   * Every card's schedule, keyed by question id.
+   *
+   * Loaded from the device first and merged with the server, so a deck opens
+   * at whatever the student last answered even with no connection.
+   */
+  const [cardStore, setCardStore] = useState<CardMap>({});
+  const [cardTab, setCardTab] = useState<DeckTab>("due");
+  /**
+   * The order being studied, held separately from the schedule.
+   *
+   * Next card has to move a card without touching its scheduling, so the
+   * skip lives here and never reaches the store.
+   */
+  const [queueIds, setQueueIds] = useState<string[]>([]);
+  /** Ticks once a second, only while the learn-ahead panel is showing. */
+  const [clockTick, setClockTick] = useState(() => Date.now());
+  const [cardToast, setCardToast] = useState<string | null>(null);
   const [quickCardRatings, setQuickCardRatings] = useState<Record<string, FlashRating>>({});
-  const [savedCardIds, setSavedCardIds] = useState<string[]>([]);
-  const [hardCardIds, setHardCardIds] = useState<string[]>([]);
-  const [reviewMode, setReviewMode] = useState(false);
-  const [hardReviewMode, setHardReviewMode] = useState(false);
   const [cardsView, setCardsView] = useState<"player" | "browser">("player");
   const [cardSearch, setCardSearch] = useState("");
   // Which course tile is mid-open. Pressing sets it, and navigation waits for
@@ -957,12 +1009,60 @@ export default function Study() {
     });
   }, [courses, search]);
   const currentQuestion = questions[questionIndex];
-  const quickDeck = hardReviewMode
-    ? questions.filter((question) => hardCardIds.includes(question.id))
-    : reviewMode
-      ? questions.filter((question) => savedCardIds.includes(question.id))
-      : questions;
+  /**
+   * The scheduler's configuration for this device.
+   *
+   * The timezone is passed in rather than read inside the scheduler, so the
+   * 4am rollover is arithmetic there and deterministic in its tests.
+   */
+  const schedulerConfig: SchedulerConfig = useMemo(
+    () => ({ ...DEFAULT_CONFIG, utcOffsetMinutes: -new Date().getTimezoneOffset() }),
+    [],
+  );
+
+  /** Every question in this topic, carrying whatever schedule it has. */
+  const queueCards: QueueCard[] = useMemo(
+    () =>
+      questions.map((question) => {
+        const stored = cardStore[question.id] ?? blankCard(schedulerConfig);
+        return { id: question.id, schedule: stored.schedule, saved: stored.saved };
+      }),
+    [questions, cardStore, schedulerConfig],
+  );
+
+  const cardCounts = deckCounts(queueCards, clockTick, schedulerConfig);
+
+  /**
+   * The deck as the scheduler orders it, then re-ordered by any skips.
+   *
+   * queueIds is the skip record: Next card moves an id to the back of it
+   * without touching the schedule, which is the whole point of a skip.
+   */
+  const quickDeck = useMemo(() => {
+    const ordered = buildQueue(queueCards, clockTick, {
+      tab: cardTab,
+      config: schedulerConfig,
+    });
+    const byId = new Map(questions.map((question) => [question.id, question]));
+    const fromQueue = ordered.map((card) => byId.get(card.id)).filter(Boolean) as Question[];
+
+    if (queueIds.length === 0) return fromQueue;
+
+    // Honour the skip order for the cards it knows, then anything new.
+    const rank = new Map(queueIds.map((id, index) => [id, index]));
+    return [...fromQueue].sort(
+      (a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }, [queueCards, questions, cardTab, queueIds, clockTick, schedulerConfig]);
+
   const currentQuickCard = quickDeck[quickCardIndex];
+
+  /** Nothing due, but something coming — Anki's learn-ahead. */
+  const cardsNextDueAt = nextDueAt(queueCards, clockTick);
+  const showLearnAhead =
+    cardTab === "due" && quickDeck.length === 0 && cardsNextDueAt !== null;
+  const canStudyAhead = canLearnAhead(queueCards, clockTick);
+  const pendingSync = countPending(cardStore);
   useEffect(() => {
     loadCourses();
   }, []);
@@ -1452,6 +1552,15 @@ export default function Study() {
     if (theoryError) console.log("THEORY LOAD ERROR:", theoryError.message);
     if (gridError) console.log("GRID LOAD ERROR:", gridError.message);
     setQuestions(qs && qs.length > 0 ? qs : []);
+
+    // The schedules for this topic's cards. Local first, so the deck opens
+    // at whatever was last answered even with no connection; anything that
+    // failed to send earlier goes out at the same time.
+    const ids = (qs || []).map((row: any) => String(row.id)).filter(isUuid);
+    loadCards(ids, schedulerConfig)
+      .then(({ cards }) => setCardStore(cards))
+      .catch((error) => console.log("CARD LOAD FAILED:", error));
+    flushPending().catch(() => {});
     setMaterials(mats && mats.length > 0 ? mats : []);
     describeRow("theory_questions", theoryRows?.[0]);
     describeRow("grid_questions", gridRows?.[0]);
@@ -1471,10 +1580,11 @@ export default function Study() {
     setQuickCardIndex(0);
     setShowBack(false);
     setQuickCardRatings({});
-    setSavedCardIds([]);
-    setHardCardIds([]);
-    setReviewMode(false);
-    setHardReviewMode(false);
+    setQueueIds([]);
+    setCardTab("due");
+    setCardToast(null);
+    // cardStore is NOT cleared: it is the student's schedule, not session
+    // state, and the next topic's cards are keyed separately anyway.
   }
   async function loadCompletedTopics(courseId: string, topicList: Topic[]) {
     const user = await sessionUser();
@@ -1742,84 +1852,107 @@ export default function Study() {
     }
   }
 
-  function moveToNextQuickCard(nextHardCardIds = hardCardIds) {
+  /**
+   * Next card: no grading, no scheduling change.
+   *
+   * The skipped card goes to the back of this pass rather than out of it, so
+   * it comes round again today instead of tomorrow. Nothing is written.
+   */
+  function moveToNextQuickCard() {
     if (quickDeck.length === 0) return;
-    const nextIndex = quickCardIndex + 1;
-    if (!reviewMode && !hardReviewMode && nextIndex >= questions.length) {
-      if (nextHardCardIds.length > 0) {
-        setHardReviewMode(true);
-        setReviewMode(false);
-        setQuickCardIndex(0);
-        setShowBack(false);
-        return;
-      }
-      if (savedCardIds.length > 0) {
-        setReviewMode(true);
-        setQuickCardIndex(0);
-        setShowBack(false);
-        return;
-      }
-      setQuickCardIndex(0);
-      setShowBack(false);
-      return;
-    }
-    if (hardReviewMode && nextIndex >= quickDeck.length) {
-      setHardReviewMode(false);
-      setHardCardIds([]);
-      if (savedCardIds.length > 0) {
-        setReviewMode(true);
-        setQuickCardIndex(0);
-        setShowBack(false);
-        return;
-      }
-      setQuickCardIndex(0);
-      setShowBack(false);
-      return;
-    }
-    if (reviewMode && nextIndex >= quickDeck.length) {
-      setQuickCardIndex(0);
-      setShowBack(false);
-      return;
-    }
-    setQuickCardIndex(nextIndex);
+
+    const ids = quickDeck.map((card) => card.id);
+    const { queue, index } = skipToNext(ids, quickCardIndex);
+
+    setQueueIds(queue);
+    setQuickCardIndex(index);
     setShowBack(false);
   }
-  function rateQuickCard(rating: FlashRating) {
+
+  /** After a grading, where the deck has already shrunk under the cursor. */
+  function advanceCard() {
+    setShowBack(false);
+    setQuickCardIndex((prev) => (prev >= quickDeck.length - 1 ? 0 : prev));
+  }
+
+  /** The old four-button vocabulary, kept for what still reads it. */
+  function ratingLabel(rating: Rating): FlashRating {
+    if (rating === "again") return "Again";
+    if (rating === "hard") return "Hard";
+    return "Good";
+  }
+  /**
+   * Grade the card, schedule it, and move on.
+   *
+   * The schedule is written locally first and sent afterwards; the student
+   * never waits on the network to see the next card.
+   */
+  function rateQuickCard(rating: Rating) {
     const current = currentQuickCard;
     if (!current) return;
-    setQuickCardRatings((prev) => ({
-      ...prev,
-      [current.id]: rating,
-    }));
-    let nextHardCardIds = hardCardIds;
-    if (rating === "Save") {
-      setSavedCardIds((prev) => {
-        if (prev.includes(current.id)) return prev;
-        return [...prev, current.id];
-      });
-    }
-    if (rating === "Hard" && !hardReviewMode) {
-      nextHardCardIds = hardCardIds.includes(current.id)
-        ? hardCardIds
-        : [...hardCardIds, current.id];
-      setHardCardIds(nextHardCardIds);
-    }
+
+    const now = Date.now();
+    const existing = cardStore[current.id] ?? blankCard(schedulerConfig);
+    const nextSchedule = scheduleReview(existing.schedule, rating, now, schedulerConfig);
+    const nextCard = { ...existing, schedule: nextSchedule, needsSync: true };
+
+    setCardStore((prev) => ({ ...prev, [current.id]: nextCard }));
+    setQuickCardRatings((prev) => ({ ...prev, [current.id]: ratingLabel(rating) }));
+
+    // The card has been graded, so it leaves the visible pass whatever the
+    // skip order said about it.
+    setQueueIds((prev) => prev.filter((id) => id !== current.id));
+
+    saveCard(current.id, nextCard).then(({ synced }) => {
+      if (!synced) return;
+      setCardStore((prev) =>
+        prev[current.id] ? { ...prev, [current.id]: { ...prev[current.id], needsSync: false } } : prev,
+      );
+    });
+
     requestAnimationFrame(() => {
       updateStudyProgress({
         questionId: current.id,
-        progressPercent: rating === "Good" ? 35 : rating === "Hard" ? 25 : 15,
-        quickCardRating: rating,
+        progressPercent: rating === "good" || rating === "easy" ? 35 : rating === "hard" ? 25 : 15,
+        quickCardRating: ratingLabel(rating),
       });
     });
-    if (rating === "Again") {
-      setShowBack(false);
-      return;
-    }
-    if (rating === "Hard") {
-      moveToNextQuickCard(nextHardCardIds);
-      return;
-    }
-    moveToNextQuickCard(nextHardCardIds);
+
+    advanceCard();
+  }
+
+  /** The caption under a button: what the scheduler will actually do. */
+  function ratingPreview(rating: Rating): string {
+    if (!currentQuickCard) return "";
+
+    const existing = cardStore[currentQuickCard.id] ?? blankCard(schedulerConfig);
+    return intervalLabel(existing.schedule, rating, clockTick, schedulerConfig);
+  }
+
+  /** Saving is a toggle, and it never touches the schedule. */
+  function toggleSaveCard() {
+    const current = currentQuickCard;
+    if (!current) return;
+
+    const existing = cardStore[current.id] ?? blankCard(schedulerConfig);
+    const nextCard = { ...existing, saved: !existing.saved, needsSync: true };
+
+    setCardStore((prev) => ({ ...prev, [current.id]: nextCard }));
+    setCardToast(nextCard.saved ? "Saved" : "Removed from Saved");
+
+    saveCard(current.id, nextCard).then(({ synced }) => {
+      if (!synced) {
+        setCardToast("Saved · will sync later");
+        return;
+      }
+      setCardStore((prev) =>
+        prev[current.id] ? { ...prev, [current.id]: { ...prev[current.id], needsSync: false } } : prev,
+      );
+    });
+  }
+
+  function currentCardSaved(): boolean {
+    return Boolean(currentQuickCard && cardStore[currentQuickCard.id]?.saved);
   }
   async function openMaterial(material: Material) {
     const kind = getMaterialKind(material.type);
@@ -3077,7 +3210,7 @@ export default function Study() {
                       {/* Saved is orthogonal to difficulty — a card can be
                           Good and bookmarked — so it marks the row rather
                           than forming a fifth group. */}
-                      {savedCardIds.includes(card.id) ? (
+                      {cardStore[card.id]?.saved ? (
                         <MaterialCommunityIcons name="bookmark" size={16} color={theme.info} />
                       ) : null}
                     </Pressable>
@@ -3091,7 +3224,197 @@ export default function Study() {
     );
   }
 
+  /**
+   * One tick a second, and only while something is counting down.
+   *
+   * The counts and the "due" filter both read `clockTick` rather than
+   * Date.now(), so a card that comes due while the student is sitting on the
+   * screen appears without a reload. Running it all the time would re-render
+   * the deck once a second for no reason, so it starts only when the
+   * learn-ahead panel is up.
+   */
+  useEffect(() => {
+    if (mode !== "cards" || !showLearnAhead) return;
+
+    const timer = setInterval(() => setClockTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [mode, showLearnAhead]);
+
+  /** The toast clears itself; nothing else dismisses it. */
+  useEffect(() => {
+    if (!cardToast) return;
+
+    const timer = setTimeout(() => setCardToast(null), 1800);
+    return () => clearTimeout(timer);
+  }, [cardToast]);
+
+  /**
+   * Keyboard shortcuts, on the web only.
+   *
+   * Space flips the card; 1, 2 and 3 grade it the way Anki's do. Grading is
+   * ignored until the answer is showing, which is the same rule the buttons
+   * follow — they are not on screen before the flip.
+   */
+  /**
+   * The latest grading function, reachable from a listener that must not be
+   * rebound on every render.
+   *
+   * Written in an effect rather than during render: this project treats a ref
+   * touched while rendering as an error, and rightly — the value would be read
+   * before it was set on the very first pass.
+   */
+  const rateRef = useRef(rateQuickCard);
+  useEffect(() => {
+    rateRef.current = rateQuickCard;
+  });
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || mode !== "cards" || !currentQuickCard) return;
+
+    function onKey(event: any) {
+      const target = event?.target;
+      const tag = String(target?.tagName || "").toLowerCase();
+      // Never steal a key from a field the student is typing in.
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) return;
+
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        setShowBack((prev) => !prev);
+        return;
+      }
+
+      if (!showBack) return;
+
+      if (event.key === "1") rateRef.current("again");
+      else if (event.key === "2") rateRef.current("hard");
+      else if (event.key === "3") rateRef.current("good");
+    }
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode, currentQuickCard, showBack]);
+
+  /** The four deck tabs. Shared by the player and the learn-ahead panel. */
+  function renderDeckPills() {
+    return (
+            <View style={styles.deckPills}>
+              {/* Deck mode was reachable two ways, neither of them visible: a
+                  "N saved" text link that only existed once you had saved
+                  something, and an automatic All -> Saved -> Hard cycle at the end
+                  of a deck. The cycle still runs; these just make the same three
+                  decks selectable directly, with their sizes shown.
+
+                  Empty decks stay in place and go inert rather than disappearing,
+                  so the row does not reshuffle as you save your first card. */}
+              {DECKS.map((deck) => {
+                const count = cardCounts[deck.key];
+                const active = cardTab === deck.key;
+
+                // All is never empty while the topic has cards, so it stays
+                // reachable as the way back out of an emptied deck.
+                const empty = count === 0 && deck.key !== "all";
+
+                return (
+                  <Pressable
+                    key={deck.key}
+                    disabled={empty}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active, disabled: empty }}
+                    accessibilityLabel={`${deck.label} deck, ${count} cards`}
+                    onPress={() => {
+                      setCardTab(deck.key);
+                      setQueueIds([]);
+                      setQuickCardIndex(0);
+                      setShowBack(false);
+                    }}
+                    style={({ hovered }: any) => [
+                      styles.deckPill,
+                      { borderColor: theme.border },
+                      hovered && !active && !empty ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
+                      active ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
+                      empty ? styles.deckPillEmpty : null,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.deckPillText,
+                        { color: active ? theme.text : theme.muted },
+                      ]}
+                    >
+                      {deck.label} · {count}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+
+              {/* Reuses the pill row rather than adding a second control strip —
+                  switching view is the same kind of decision as switching deck. */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: cardsView === "browser" }}
+                accessibilityLabel={cardsView === "browser" ? "Show the card player" : "Browse all cards"}
+                onPress={() => setCardsView(cardsView === "browser" ? "player" : "browser")}
+                style={({ hovered }: any) => [
+                  styles.deckViewToggle,
+                  { borderColor: theme.border },
+                  hovered ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
+                  cardsView === "browser" ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name={cardsView === "browser" ? "cards-outline" : "format-list-bulleted"}
+                  size={17}
+                  color={theme.text}
+                />
+              </Pressable>
+            </View>
+    );
+  }
+
   function renderQuickCards() {
+    // Nothing due, but something coming. Anki calls this learning ahead: a
+    // countdown rather than a dead end, and the option to pull the next card
+    // forward when it is close.
+    if (questions.length > 0 && showLearnAhead) {
+      return (
+        <View style={styles.quickCardScreen}>
+          {renderDeckPills()}
+
+          <View style={styles.learnAhead}>
+            <Text style={[styles.learnAheadCount, { color: theme.text }]}>
+              {formatCountdown((cardsNextDueAt ?? clockTick) - clockTick)}
+            </Text>
+            <Text style={[styles.learnAheadLabel, { color: theme.muted }]}>
+              until the next card
+            </Text>
+
+            {canStudyAhead ? (
+              <TouchableOpacity
+                onPress={() => {
+                  // Studying ahead is a view change, not a reschedule: the
+                  // cards keep the due times the scheduler gave them.
+                  setCardTab("all");
+                  setQueueIds([]);
+                  setQuickCardIndex(0);
+                  setShowBack(false);
+                }}
+                accessibilityRole="button"
+                style={[styles.learnAheadBtn, { backgroundColor: theme.accent }]}
+              >
+                <Text style={[styles.learnAheadBtnText, { color: theme.onAccent }]}>
+                  Study now
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[styles.learnAheadLabel, { color: theme.muted }]}>
+                Come back then, or pick another deck above.
+              </Text>
+            )}
+          </View>
+        </View>
+      );
+    }
+
     if (questions.length === 0 || !currentQuickCard) {
       return (
         <EmptyState
@@ -3106,95 +3429,18 @@ export default function Study() {
     const deckProgress =
       quickDeck.length > 0 ? ((quickCardIndex + 1) / quickDeck.length) * 100 : 0;
 
-    const ratings: { key: FlashRating; icon: IconName; color: string }[] = [
-      { key: "Again", icon: "refresh", color: theme.error },
-      { key: "Hard", icon: "alert-outline", color: theme.warning },
-      { key: "Good", icon: "check", color: theme.success },
-      { key: "Save", icon: "bookmark-outline", color: theme.info },
+    // Save left this row: it is not a grade, and sitting among three grades
+    // was why rating a card could silently save it. It is a toggle beside the
+    // card now.
+    const ratings: { key: Rating; label: string; icon: IconName; color: string }[] = [
+      { key: "again", label: "Again", icon: "refresh", color: theme.error },
+      { key: "hard", label: "Hard", icon: "alert-outline", color: theme.warning },
+      { key: "good", label: "Good", icon: "check", color: theme.success },
     ];
 
     return (
       <View style={styles.quickCardScreen}>
-        <View style={styles.deckPills}>
-          {/* Deck mode was reachable two ways, neither of them visible: a
-              "N saved" text link that only existed once you had saved
-              something, and an automatic All -> Saved -> Hard cycle at the end
-              of a deck. The cycle still runs; these just make the same three
-              decks selectable directly, with their sizes shown.
-
-              Empty decks stay in place and go inert rather than disappearing,
-              so the row does not reshuffle as you save your first card. */}
-          {DECKS.map((deck) => {
-            const count =
-              deck.key === "saved"
-                ? savedCardIds.length
-                : deck.key === "hard"
-                  ? hardCardIds.length
-                  : questions.length;
-
-            const active =
-              deck.key === "hard"
-                ? hardReviewMode
-                : deck.key === "saved"
-                  ? reviewMode && !hardReviewMode
-                  : !reviewMode && !hardReviewMode;
-
-            const empty = count === 0;
-
-            return (
-              <Pressable
-                key={deck.key}
-                disabled={empty}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active, disabled: empty }}
-                accessibilityLabel={`${deck.label} deck, ${count} cards`}
-                onPress={() => {
-                  setReviewMode(deck.key === "saved");
-                  setHardReviewMode(deck.key === "hard");
-                  setQuickCardIndex(0);
-                  setShowBack(false);
-                }}
-                style={({ hovered }: any) => [
-                  styles.deckPill,
-                  { borderColor: theme.border },
-                  hovered && !active && !empty ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
-                  active ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
-                  empty ? styles.deckPillEmpty : null,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.deckPillText,
-                    { color: active ? theme.text : theme.muted },
-                  ]}
-                >
-                  {deck.label} · {count}
-                </Text>
-              </Pressable>
-            );
-          })}
-
-          {/* Reuses the pill row rather than adding a second control strip —
-              switching view is the same kind of decision as switching deck. */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ selected: cardsView === "browser" }}
-            accessibilityLabel={cardsView === "browser" ? "Show the card player" : "Browse all cards"}
-            onPress={() => setCardsView(cardsView === "browser" ? "player" : "browser")}
-            style={({ hovered }: any) => [
-              styles.deckViewToggle,
-              { borderColor: theme.border },
-              hovered ? { backgroundColor: withAlpha(theme.text, 0.04) } : null,
-              cardsView === "browser" ? { backgroundColor: theme.soft, borderColor: "transparent" } : null,
-            ]}
-          >
-            <MaterialCommunityIcons
-              name={cardsView === "browser" ? "cards-outline" : "format-list-bulleted"}
-              size={17}
-              color={theme.text}
-            />
-          </Pressable>
-        </View>
+        {renderDeckPills()}
 
         {cardsView === "browser" ? null : (
           <Text style={[styles.quickCount, { color: theme.muted }]}>
@@ -3215,7 +3461,7 @@ export default function Study() {
                 // Progress, not identity — the course hue said nothing here.
                 backgroundColor: withAlpha(theme.text, 0.28),
                 transitionProperty: "width",
-                transitionDuration: motionTokens.base,
+                transitionDuration: reduceMotion ? 0 : motionTokens.base,
               },
             ]}
           />
@@ -3233,9 +3479,13 @@ export default function Study() {
                 backgroundColor: theme.card,
                 borderColor: theme.border,
                 // A small hinge on flip, rather than the content just swapping.
-                transform: [{ perspective: 700 }, { rotateX: showBack ? "3deg" : "0deg" }],
+                // Dropped entirely under reduced motion — not merely sped up,
+                // since the tilt is the thing being objected to.
+                transform: reduceMotion
+                  ? []
+                  : [{ perspective: 700 }, { rotateX: showBack ? "3deg" : "0deg" }],
                 transitionProperty: "transform, background-color",
-                transitionDuration: motionTokens.base,
+                transitionDuration: reduceMotion ? 0 : motionTokens.base,
               },
             ]}
           >
@@ -3274,20 +3524,60 @@ export default function Study() {
 
         {showBack && (
           <View style={styles.ratingGrid}>
-            {ratings.map(({ key, icon, color }) => (
+            {ratings.map(({ key, label, icon, color }) => (
               <TouchableOpacity
                 key={key}
                 onPress={() => rateQuickCard(key)}
+                accessibilityRole="button"
+                accessibilityLabel={`${label}, next in ${ratingPreview(key)}`}
                 style={[styles.ratingBtn, { borderColor: theme.border }]}
               >
                 <MaterialCommunityIcons name={icon} size={18} color={color} />
-                {/* The glyph carries the meaning; the label stays neutral so four
-                    filled blocks do not compete with each other. */}
-                <Text style={[styles.ratingText, { color: theme.text }]}>{key}</Text>
+                {/* The glyph carries the meaning; the label stays neutral so the
+                    buttons do not compete with each other. */}
+                <Text style={[styles.ratingText, { color: theme.text }]}>{label}</Text>
+                {/* Anki's caption. The slot has a fixed height so the row does
+                    not jump when a card's first caption arrives. */}
+                <Text style={[styles.ratingInterval, { color: theme.muted }]}>
+                  {ratingPreview(key)}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
         )}
+
+        {/* A toggle, not a grade. Filled when kept; tapping again removes it
+            and the Saved count follows immediately. */}
+        <TouchableOpacity
+          onPress={toggleSaveCard}
+          accessibilityRole="button"
+          accessibilityState={{ selected: currentCardSaved() }}
+          accessibilityLabel={currentCardSaved() ? "Remove from saved" : "Save this card"}
+          style={[styles.saveCardBtn, { borderColor: theme.border }]}
+        >
+          <MaterialCommunityIcons
+            name={currentCardSaved() ? "bookmark" : "bookmark-outline"}
+            size={18}
+            color={currentCardSaved() ? theme.accent : theme.muted}
+          />
+          <Text
+            style={[
+              styles.saveCardText,
+              { color: currentCardSaved() ? theme.accent : theme.text },
+            ]}
+          >
+            {currentCardSaved() ? "Saved" : "Save"}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Quiet, and never an error. A review that has not reached the
+            server yet is a connection problem, not the student's problem,
+            and the card is safe on the device either way. */}
+        {pendingSync > 0 ? (
+          <Text style={[styles.syncNote, { color: theme.muted2 }]}>
+            {pendingSync} {pendingSync === 1 ? "card" : "cards"} will sync later
+          </Text>
+        ) : null}
 
         <TouchableOpacity
           // Called with no argument on purpose. Passed straight as the
@@ -3306,6 +3596,13 @@ export default function Study() {
         </TouchableOpacity>
         </>
         )}
+        {cardToast ? (
+          <View style={styles.cardToast} pointerEvents="none">
+            <View style={[styles.cardToastInner, { backgroundColor: theme.text }]}>
+              <Text style={[styles.cardToastText, { color: theme.bg }]}>{cardToast}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -4356,6 +4653,62 @@ const styles = StyleSheet.create({
   ratingGrid: {
     flexDirection: "row",
     gap: spacing.sm,
+  },
+  // --- the card player -------------------------------------------------
+  // A fixed height, so the row does not jump when a card's first caption
+  // arrives: the slot is there whether or not there is anything in it.
+  ratingInterval: { ...typeScale.micro, fontWeight: weight.medium, letterSpacing: 0, height: 14, marginTop: 2 },
+  saveCardBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    alignSelf: "center",
+    // 48pt, like every other target on this screen.
+    minHeight: 48,
+    paddingHorizontal: spacing.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.pill,
+    marginTop: spacing.md,
+  },
+  saveCardText: { ...typeScale.caption, letterSpacing: 0 },
+  learnAhead: {
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.xxxl,
+  },
+  learnAheadCount: { ...typeScale.display, fontVariant: ["tabular-nums"] },
+  learnAheadLabel: { ...typeScale.caption, fontWeight: weight.regular, letterSpacing: 0 },
+  learnAheadBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radius.pill,
+    marginTop: spacing.md,
+  },
+  learnAheadBtnText: { ...typeScale.body, fontWeight: weight.bold },
+  cardToast: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 96,
+    alignItems: "center",
+  },
+  cardToastInner: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radius.pill,
+  },
+  cardToastText: { ...typeScale.caption, letterSpacing: 0 },
+  syncNote: {
+    ...typeScale.micro,
+    fontWeight: weight.regular,
+    letterSpacing: 0,
+    textAlign: "center",
+    marginTop: spacing.sm,
   },
   ratingBtn: {
     flex: 1,

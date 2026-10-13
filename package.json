@@ -51,6 +51,7 @@
     "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~56.0.4",
@@ -66,7 +67,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "postinstall": "node ./scripts/sync-katex.js",
-    "build:web": "expo export -p web && node ./scripts/stamp-build.mjs dist && node ./scripts/build-sw.mjs dist"
+    "build:web": "expo export -p web && node ./scripts/stamp-build.mjs dist && node ./scripts/build-sw.mjs dist",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "private": true,
   "allowScripts": {

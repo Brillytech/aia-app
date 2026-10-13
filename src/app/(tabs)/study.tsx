@@ -3290,7 +3290,13 @@ export default function Study() {
         )}
 
         <TouchableOpacity
-          onPress={moveToNextQuickCard}
+          // Called with no argument on purpose. Passed straight as the
+          // handler, React Native hands the press event in as the first
+          // parameter, which landed in moveToNextQuickCard's
+          // `nextHardCardIds = hardCardIds` default. Reading .length off a
+          // GestureResponderEvent gives undefined, so the end-of-deck
+          // hand-off into the Struggled deck never fired from this button.
+          onPress={() => moveToNextQuickCard()}
           // Primary actions belong to the brand; course and mode hues tint
           // context. Identical on an orange course, correct on a blue one.
           style={[styles.nextBtn, { backgroundColor: theme.accent }]}
